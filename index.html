@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MindCanvas — Carte mentale locale</title>
+<style>
+:root{--bg:#0b1020;--panel:#11182b;--panel2:#17213a;--line:#273552;--text:#eef3ff;--muted:#91a0bf;--accent:#6ea8fe;--accent2:#8b5cf6;--danger:#ff6b81;--shadow:0 18px 50px #0006}
+*{box-sizing:border-box}html,body{height:100%;margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--text);background:var(--bg);overflow:hidden}
+button,input,textarea{font:inherit}button{cursor:pointer;border:0}
+.app{height:100%;display:grid;grid-template-rows:64px 1fr}
+header{display:flex;align-items:center;gap:16px;padding:0 18px;border-bottom:1px solid var(--line);background:#0e1528dd;backdrop-filter:blur(18px);z-index:10}
+.logo{display:flex;align-items:center;gap:11px;font-weight:800;letter-spacing:-.02em}.logoMark{width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,var(--accent),var(--accent2));display:grid;place-items:center;box-shadow:0 8px 25px #6ea8fe35}.logoMark:before{content:"";width:13px;height:13px;border:2px solid white;border-radius:50%;box-shadow:10px 5px 0 -3px white,-10px 6px 0 -3px white}
+.title{color:var(--muted);font-size:13px;border-left:1px solid var(--line);padding-left:16px}
+.actions{margin-left:auto;display:flex;gap:8px}.btn{height:38px;padding:0 13px;border-radius:10px;color:var(--text);background:var(--panel2);border:1px solid var(--line);font-weight:650}.btn:hover{border-color:#45608e;background:#1b2947}.btn.primary{background:linear-gradient(135deg,#4f8df7,#7c5ce6);border-color:transparent}.btn.danger{color:#ffb2bd}.btn.icon{width:38px;padding:0;display:grid;place-items:center;font-size:18px}
+.workspace{position:relative;overflow:hidden;background:
+radial-gradient(circle at 20% 20%,#182750 0,#0b1020 35%),
+linear-gradient(#ffffff03 1px,transparent 1px),linear-gradient(90deg,#ffffff03 1px,transparent 1px);background-size:auto,32px 32px}
+canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
+.hud{position:absolute;left:16px;bottom:16px;display:flex;align-items:center;gap:7px;background:#10182add;border:1px solid var(--line);border-radius:12px;padding:7px;backdrop-filter:blur(14px);box-shadow:var(--shadow)}
+.hud button{width:34px;height:34px;border-radius:8px;background:#1a2540;color:var(--text);font-size:18px}.zoom{min-width:62px;text-align:center;color:var(--muted);font-size:12px}
+.hint{position:absolute;right:16px;bottom:16px;color:var(--muted);font-size:12px;background:#10182acc;border:1px solid var(--line);padding:9px 12px;border-radius:10px}
+.empty{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none}.emptyCard{padding:30px 36px;text-align:center;background:#10182dcc;border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow);max-width:440px}.emptyCard h2{margin:0 0 8px}.emptyCard p{margin:0;color:var(--muted);line-height:1.55}.emptyCard kbd{background:#1b2947;border:1px solid var(--line);padding:2px 6px;border-radius:5px;color:#dbe6ff}
+.modalWrap{position:fixed;inset:0;background:#02050aaa;display:none;place-items:center;z-index:50;padding:20px}.modalWrap.open{display:grid}.modal{width:min(520px,100%);background:var(--panel);border:1px solid var(--line);border-radius:18px;box-shadow:0 30px 100px #0009;padding:20px}.modal h3{margin:0 0 18px}.field{margin:13px 0}.field label{display:block;color:var(--muted);font-size:12px;margin-bottom:7px}.field input,.field textarea{width:100%;border:1px solid var(--line);background:#0b1222;color:var(--text);border-radius:10px;padding:11px 12px;outline:none}.field textarea{min-height:110px;resize:vertical}.field input:focus,.field textarea:focus{border-color:var(--accent)}.modalActions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
+.toast{position:fixed;right:18px;top:78px;background:#121c32;border:1px solid var(--line);padding:11px 14px;border-radius:10px;box-shadow:var(--shadow);opacity:0;transform:translateY(-8px);transition:.2s;z-index:100;color:#dfe8ff}.toast.show{opacity:1;transform:none}
+@media(max-width:760px){.title{display:none}.actions .label{display:none}.btn{padding:0 10px}.hint{display:none}}
+</style>
+</head>
+<body>
+<div class="app">
+<header>
+  <div class="logo"><div class="logoMark"></div><span>MindCanvas</span></div>
+  <div class="title" id="docTitle">Nouvelle carte</div>
+  <div class="actions">
+    <button class="btn" id="editBtn" style="display:none;">Modifier la bulle ✏️</button>
+    <button class="btn" id="newBtn">Nouvelle</button>
+    <button class="btn" id="importBtn">Importer JSON</button>
+    <button class="btn" id="exportJsonBtn">Exporter JSON</button>
+    <button class="btn primary" id="pngBtn">Télécharger PNG</button>
+    <input id="fileJson" type="file" accept=".json,application/json" hidden>
+  </div>
+</header>
+<main class="workspace" id="workspace">
+  <canvas id="canvas"></canvas>
+  <div class="empty" id="empty"><div class="emptyCard"><h2>Créez votre carte mentale</h2><p>Double-cliquez pour ajouter ou modifier un nœud. Sélectionnez une bulle puis cliquez sur "Modifier" pour changer son contenu.</p><p style="margin-top:14px"><kbd>Entrée</kbd> enfant · <kbd>Suppr</kbd> supprimer · <kbd>Molette</kbd> zoom · <kbd>Espace + glisser</kbd> déplacer</p></div></div>
+  <div class="hud">
+    <button id="minus">−</button><div class="zoom" id="zoomLabel">100%</div><button id="plus">+</button><button id="fit">⌖</button>
+  </div>
+  <div class="hint">Double-cliquez sur une bulle pour la modifier</div>
+</main>
+</div>
+
+<div class="modalWrap" id="modalWrap">
+  <div class="modal">
+    <h3 id="modalTitle">Modifier la bulle</h3>
+    <div class="field"><label>Titre de la bulle</label><input id="nodeText" maxlength="180" placeholder="Ex. Projet, idée, concept…"></div>
+    <div class="field"><label>Description ou Liens (ex: https://google.com)</label><textarea id="nodeNote" maxlength="800" placeholder="Ajoutez un texte long ou un lien..."></textarea></div>
+    <div class="field"><label>Image</label><input id="nodeImage" type="file" accept="image/*"></div>
+    <div class="modalActions"><button class="btn" id="cancelModal">Annuler</button><button class="btn primary" id="saveModal">Enregistrer</button></div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+(() => {
+const $=s=>document.querySelector(s), canvas=$("#canvas"), ctx=canvas.getContext("2d"), ws=$("#workspace");
+const state={version:1,title:"Nouvelle carte",nodes:[],edges:[],camera:{x:0,y:0,scale:1},selected:null,drag:null,space:false};
+const KEY="mindcanvas-v1";
+let modalMode="edit", modalNode=null, pendingImage=null, toastTimer;
+let clickStart = {x: 0, y: 0};
+let renderPending = false;
+
+// Système de mise en cache d'images pour annuler le lag
+const imageCache = new Map();
+function getCachedImage(src) {
+  if (!src) return null;
+  if (imageCache.has(src)) return imageCache.get(src);
+  const img = new Image();
+  img.src = src;
+  img.onload = () => requestDraw();
+  imageCache.set(src, img);
+  return img;
+}
+
+function uid(){return crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)+Math.random().toString(36).slice(2)}
+function saveLocal(){localStorage.setItem(KEY,JSON.stringify({version:1,title:state.title,nodes:state.nodes,edges:state.edges,camera:state.camera}));}
+function loadLocal(){try{const d=JSON.parse(localStorage.getItem(KEY)); if(d?.nodes){Object.assign(state,{...state,...d,selected:null,drag:null});}}catch{}}
+function toast(t){const e=$("#toast");e.textContent=t;e.classList.add("show");clearTimeout(toastTimer);toastTimer=setTimeout(()=>e.classList.remove("show"),1800)}
+function resize(){const r=ws.getBoundingClientRect(),d=devicePixelRatio||1;canvas.width=r.width*d;canvas.height=r.height*d;canvas.style.width=r.width+"px";canvas.style.height=r.height+"px";ctx.setTransform(d,0,0,d,0,0);requestDraw()}
+window.addEventListener("resize",resize);
+
+function requestDraw() {
+  if (!renderPending) {
+    renderPending = true;
+    requestAnimationFrame(() => {
+      renderPending = false;
+      draw();
+    });
+  }
+}
+
+function worldPoint(sx,sy){const r=ws.getBoundingClientRect();return{x:(sx-r.left-state.camera.x)/state.camera.scale,y:(sy-r.top-state.camera.y)/state.camera.scale}}
+function nodeAt(sx,sy){const p=worldPoint(sx,sy);for(let i=state.nodes.length-1;i>=0;i--){const n=state.nodes[i],w=n.w||220,h=n.h||86;if(p.x>=n.x-w/2&&p.x<=n.x+w/2&&p.y>=n.y-h/2&&p.y<=n.y+h/2)return n}return null}
+function edgeExists(a,b){return state.edges.some(e=>(e.a===a&&e.b===b)||(e.a===b&&e.b===a))}
+
+function addNode(x,y,parent=null,text="Nouvelle idée"){
+ const n={id:uid(),x,y,w:230,h:86,text,note:"",image:null};state.nodes.push(n);
+ if(parent&&!edgeExists(parent.id,n.id))state.edges.push({id:uid(),a:parent.id,b:n.id});
+ state.selected=n.id;saveLocal();requestDraw();return n;
+}
+
+function roundedRect(c,x,y,w,h,r){c.beginPath();c.roundRect(x,y,w,h,r)}
+
+function drawCoverImage(ctx, img, x, y, w, h) {
+  const imgRatio = img.width / img.height;
+  const targetRatio = w / h;
+  let sx, sy, sw, sh;
+
+  if (imgRatio > targetRatio) {
+    sh = img.height;
+    sw = img.height * targetRatio;
+    sx = (img.width - sw) / 2;
+    sy = 0;
+  } else {
+    sw = img.width;
+    sh = img.width / targetRatio;
+    sx = 0;
+    sy = (img.height - sh) / 2;
+  }
+  ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h);
+}
+
+function getWrappedLines(c, text, maxWidth) {
+  if (!text) return [];
+  const lines = [];
+  const rawLines = String(text).split('\n');
+
+  for (const rawLine of rawLines) {
+    const words = rawLine.split(/\s+/);
+    let line = "";
+
+    for (const word of words) {
+      if (c.measureText(word).width > maxWidth) {
+        if (line) { lines.push(line); line = ""; }
+        let currentSub = "";
+        for (const char of word) {
+          if (c.measureText(currentSub + char).width > maxWidth) {
+            lines.push(currentSub);
+            currentSub = char;
+          } else {
+            currentSub += char;
+          }
+        }
+        line = currentSub;
+      } else {
+        const test = line ? line + " " + word : word;
+        if (c.measureText(test).width > maxWidth && line) {
+          lines.push(line);
+          line = word;
+        } else {
+          line = test;
+        }
+      }
+    }
+    if (line) lines.push(line);
+  }
+  return lines;
+}
+
+function extractUrls(text) {
+  const urlRegex = /(https?:\/\/[^\s]+)/g;
+  return text.match(urlRegex) || [];
+}
+
+function draw(){
+ const r=ws.getBoundingClientRect();ctx.clearRect(0,0,r.width,r.height);
+ ctx.save();ctx.translate(state.camera.x,state.camera.y);ctx.scale(state.camera.scale,state.camera.scale);
+ 
+ // Lignes de connexion
+ for(const e of state.edges){const a=state.nodes.find(n=>n.id===e.a),b=state.nodes.find(n=>n.id===e.b);if(!a||!b)continue;
+   const dx=b.x-a.x,dy=b.y-a.y,len=Math.hypot(dx,dy)||1;const ox=dx/len*85,oy=dy/len*28;
+   ctx.beginPath();ctx.moveTo(a.x+ox,a.y+oy);ctx.bezierCurveTo((a.x+b.x)/2,a.y,(a.x+b.x)/2,b.y,b.x-ox,b.y-oy);ctx.strokeStyle="#334466";ctx.lineWidth=3;ctx.stroke();
+ }
+
+ // Bulles (nœuds)
+ for(const n of state.nodes){
+   n.w = 240;
+   const imgSize = 56;
+   const tx = n.image ? (imgSize + 20) : 14;
+   const tw = n.w - tx - 12;
+
+   ctx.font="700 15px Inter,system-ui,sans-serif";
+   const titleLines = getWrappedLines(ctx, n.text || "Sans titre", tw);
+   
+   ctx.font="12px Inter,system-ui,sans-serif";
+   const noteLines = getWrappedLines(ctx, n.note || "", tw);
+
+   const titleHeight = titleLines.length * 20;
+   const noteHeight = noteLines.length * 16;
+   const contentHeight = 24 + titleHeight + (noteLines.length ? 6 + noteHeight : 0);
+   
+   n.h = Math.max(76, n.image ? Math.max(contentHeight, imgSize + 20) : contentHeight);
+
+   const x=n.x-n.w/2, y=n.y-n.h/2, w=n.w, h=n.h, sel=n.id===state.selected;
+
+   ctx.save();
+   ctx.shadowColor=sel?"#6ea8fe55":"#00000055";ctx.shadowBlur=sel?22:14;ctx.shadowOffsetY=7;
+   roundedRect(ctx,x,y,w,h,14);ctx.fillStyle="#141e34";ctx.fill();ctx.shadowColor="transparent";
+   ctx.lineWidth=sel?2.5:1;ctx.strokeStyle=sel?"#76aafc":"#2a3957";ctx.stroke();
+   
+   // Affichage image fluide optimisé
+   if(n.image){
+     const img = getCachedImage(n.image);
+     if (img && img.complete) {
+       ctx.save();
+       const imgY = y + (h - imgSize) / 2;
+       roundedRect(ctx, x + 10, imgY, imgSize, imgSize, 10);
+       ctx.clip();
+       drawCoverImage(ctx, img, x + 10, imgY, imgSize, imgSize);
+       ctx.restore();
+
+       // Contour élégant sur l'image
+       roundedRect(ctx, x + 10, imgY, imgSize, imgSize, 10);
+       ctx.strokeStyle = "rgba(255,255,255,0.15)";
+       ctx.lineWidth = 1;
+       ctx.stroke();
+     }
+   }
+   
+   const textX = x + tx;
+   let currentY = y + 14;
+
+   // Titre
+   ctx.fillStyle="#f2f6ff";ctx.font="700 15px Inter,system-ui,sans-serif";ctx.textBaseline="top";
+   titleLines.forEach(l => { ctx.fillText(l, textX, currentY); currentY += 20; });
+
+   // Description / Liens
+   if(noteLines.length){
+     currentY += 2;
+     ctx.font="12px Inter,system-ui,sans-serif";
+     noteLines.forEach(l => {
+       const trimmed = l.trim();
+       if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+         ctx.fillStyle = "#6ea8fe";
+       } else {
+         ctx.fillStyle = "#91a0bf";
+       }
+       ctx.fillText(l, textX, currentY); 
+       currentY += 16;
+     });
+   }
+   ctx.restore();
+ }
+ ctx.restore();
+
+ // Afficher ou masquer le bouton de modification dans la barre d'outils
+ const selectedNode = state.nodes.find(n => n.id === state.selected);
+ $("#editBtn").style.display = selectedNode ? "inline-block" : "none";
+
+ $("#empty").style.display=state.nodes.length?"none":"grid";
+ $("#zoomLabel").textContent=Math.round(state.camera.scale*100)+"%";$("#docTitle").textContent=state.title;
+}
+
+function fit(){if(!state.nodes.length){state.camera={x:0,y:0,scale:1};requestDraw();return}const r=ws.getBoundingClientRect(),pad=100;let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;state.nodes.forEach(n=>{minX=Math.min(minX,n.x-n.w/2);maxX=Math.max(maxX,n.x+n.w/2);minY=Math.min(minY,n.y-n.h/2);maxY=Math.max(maxY,n.y+n.h/2)});const s=Math.min((r.width-pad*2)/(maxX-minX||1),(r.height-pad*2)/(maxY-minY||1),1.5);state.camera.scale=Math.max(.25,s);state.camera.x=r.width/2-(minX+maxX)/2*s;state.camera.y=r.height/2-(minY+maxY)/2*s;requestDraw();saveLocal()}
+
+function openModal(node,mode="edit"){
+ modalMode=mode;modalNode=node;pendingImage=null;
+ $("#modalTitle").textContent=mode==="new"?"Nouveau nœud":"Modifier la bulle";
+ $("#nodeText").value=node?.text||"";
+ $("#nodeNote").value=node?.note||"";
+ $("#nodeImage").value="";
+ $("#modalWrap").classList.add("open");
+ setTimeout(()=>$("#nodeText").focus(),30);
+}
+
+function closeModal(){$("#modalWrap").classList.remove("open");modalNode=null;pendingImage=null}
+
+$("#editBtn").onclick=()=>{
+  const n = state.nodes.find(n => n.id === state.selected);
+  if(n) openModal(n, "edit");
+};
+
+$("#nodeImage").addEventListener("change",e=>{const f=e.target.files[0];if(!f)return;if(f.size>5*1024*1024){toast("Image limitée à 5 Mo");e.target.value="";return}const rd=new FileReader();rd.onload=()=>pendingImage=rd.result;rd.readAsDataURL(f)});
+$("#cancelModal").onclick=closeModal;
+$("#saveModal").onclick=()=>{if(!modalNode)return;modalNode.text=$("#nodeText").value.trim()||"Sans titre";modalNode.note=$("#nodeNote").value.trim();if(pendingImage)modalNode.image=pendingImage;saveLocal();requestDraw();closeModal();toast("Bulle enregistrée")};
+$("#modalWrap").addEventListener("click",e=>{if(e.target.id==="modalWrap")closeModal()});
+
+// Interaction Canvas
+canvas.addEventListener("dblclick",e=>{
+  const n=nodeAt(e.clientX,e.clientY);
+  if(n) openModal(n, "edit");
+  else {
+    const p=worldPoint(e.clientX,e.clientY);
+    openModal(addNode(p.x,p.y), "new");
+  }
+});
+
+canvas.addEventListener("pointerdown",e=>{
+ const n=nodeAt(e.clientX,e.clientY);canvas.setPointerCapture(e.pointerId);
+ clickStart = {x: e.clientX, y: e.clientY};
+ if(e.button===1||state.space||(!n&&e.button===0)){
+   state.drag={type:"pan",sx:e.clientX,sy:e.clientY,cx:state.camera.x,cy:state.camera.y};
+   state.selected = null;
+   requestDraw();
+   return;
+ }
+ if(n){state.selected=n.id;state.drag={type:"node",n,sx:e.clientX,sy:e.clientY,x:n.x,y:n.y};requestDraw()}
+});
+
+canvas.addEventListener("pointermove",e=>{if(!state.drag)return;if(state.drag.type==="pan"){state.camera.x=state.drag.cx+e.clientX-state.drag.sx;state.camera.y=state.drag.cy+e.clientY-state.drag.sy}else{const d=state.drag,n=d.n; n.x=d.x+(e.clientX-d.sx)/state.camera.scale;n.y=d.y+(e.clientY-d.sy)/state.camera.scale}requestDraw()});
+
+canvas.addEventListener("pointerup",e=>{
+ if(state.drag){
+   saveLocal();state.drag=null;
+ }
+});
+
+canvas.addEventListener("wheel",e=>{e.preventDefault();const before=worldPoint(e.clientX,e.clientY),factor=e.deltaY<0?1.1:.9;state.camera.scale=Math.min(3,Math.max(.25,state.camera.scale*factor));const r=ws.getBoundingClientRect();state.camera.x=e.clientX-r.left-before.x*state.camera.scale;state.camera.y=e.clientY-r.top-before.y*state.camera.scale;requestDraw();saveLocal()},{passive:false});
+
+window.addEventListener("keydown",e=>{
+ if(e.code==="Space")state.space=true;
+ if($("#modalWrap").classList.contains("open")){if(e.key==="Escape")closeModal();return}
+ if(e.key==="Delete"||e.key==="Backspace"){const n=state.nodes.find(n=>n.id===state.selected);if(n){state.nodes=state.nodes.filter(x=>x.id!==n.id);state.edges=state.edges.filter(x=>x.a!==n.id&&x.b!==n.id);state.selected=null;saveLocal();requestDraw();toast("Nœud supprimé")}}
+ if(e.key==="Enter"&&state.selected){const p=state.nodes.find(n=>n.id===state.selected);addNode(p.x+220,p.y+110,p);openModal(state.nodes.at(-1),"new")}
+});
+
+window.addEventListener("keyup",e=>{if(e.code==="Space")state.space=false});
+$("#plus").onclick=()=>{state.camera.scale=Math.min(3,state.camera.scale*1.15);requestDraw();saveLocal()};
+$("#minus").onclick=()=>{state.camera.scale=Math.max(.25,state.camera.scale/1.15);requestDraw();saveLocal()};
+$("#fit").onclick=fit;
+$("#newBtn").onclick=()=>{if(state.nodes.length&&!confirm("Créer une nouvelle carte ?"))return;state.title="Nouvelle carte";state.nodes=[];state.edges=[];state.selected=null;state.camera={x:0,y:0,scale:1};saveLocal();requestDraw()};
+$("#importBtn").onclick=()=>$("#fileJson").click();
+$("#fileJson").onchange=e=>{const f=e.target.files[0];if(!f)return;const rd=new FileReader();rd.onload=()=>{try{const d=JSON.parse(rd.result);if(!Array.isArray(d.nodes)||!Array.isArray(d.edges))throw 0;state.title=d.title||"Carte importée";state.nodes=d.nodes;state.edges=d.edges;state.camera=d.camera||{x:0,y:0,scale:1};state.selected=null;saveLocal();requestDraw();toast("Carte importée")}catch{toast("JSON invalide")}};rd.readAsText(f);e.target.value=""};
+function download(name,data,type){const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([data],{type}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
+$("#exportJsonBtn").onclick=()=>{const data={format:"MindCanvas",version:1,title:state.title,nodes:state.nodes,edges:state.edges,camera:state.camera};download((state.title||"carte").replace(/[^\w-]+/g,"_")+".json",JSON.stringify(data,null,2),"application/json");toast("JSON téléchargé")};
+$("#pngBtn").onclick=()=>{
+ if(!state.nodes.length){toast("Ajoutez au moins un nœud");return}
+ const minX=Math.min(...state.nodes.map(n=>n.x-n.w/2))-60,maxX=Math.max(...state.nodes.map(n=>n.x+n.w/2))+60,minY=Math.min(...state.nodes.map(n=>n.y-n.h/2))-60,maxY=Math.max(...state.nodes.map(n=>n.y+n.h/2))+60;
+ const scale=2,w=Math.ceil((maxX-minX)*scale),h=Math.ceil((maxY-minY)*scale),off=document.createElement("canvas");off.width=w;off.height=h;const c=off.getContext("2d");c.fillStyle="#0b1020";c.fillRect(0,0,w,h);c.save();c.scale(scale,scale);c.translate(-minX,-minY);
+ for(const e of state.edges){const a=state.nodes.find(n=>n.id===e.a),b=state.nodes.find(n=>n.id===e.b);if(!a||!b)continue;const dx=b.x-a.x,dy=b.y-a.y,len=Math.hypot(dx,dy)||1,ox=dx/len*85,oy=dy/len*28;c.beginPath();c.moveTo(a.x+ox,a.y+oy);c.bezierCurveTo((a.x+b.x)/2,a.y,(a.x+b.x)/2,b.y,b.x-ox,b.y-oy);c.strokeStyle="#41577d";c.lineWidth=3;c.stroke()}
+ for(const n of state.nodes){
+   const x=n.x-n.w/2,y=n.y-n.h/2;
+   roundedRect(c,x,y,n.w,n.h,14);c.fillStyle="#141e34";c.fill();c.strokeStyle="#2f4265";c.lineWidth=1;c.stroke();
+   
+   if(n.image){
+     const img = getCachedImage(n.image);
+     if(img && img.complete) {
+       c.save();
+       roundedRect(c, x+10, y+(n.h-56)/2, 56, 56, 10);
+       c.clip();
+       drawCoverImage(c, img, x+10, y+(n.h-56)/2, 56, 56);
+       c.restore();
+     }
+   }
+   
+   c.fillStyle="#f2f6ff";c.font="700 15px Inter,system-ui,sans-serif";c.textBaseline="top";
+   let cy = y + 14;
+   const tx = n.image ? 76 : 14;
+   getWrappedLines(c,n.text||"Sans titre",n.w-tx-12).forEach(l=>{c.fillText(l,x+tx,cy);cy+=20});
+   if(n.note){cy+=2;c.fillStyle="#91a0bf";c.font="12px Inter,system-ui,sans-serif";getWrappedLines(c,n.note,n.w-tx-12).forEach(l=>{c.fillText(l,x+tx,cy);cy+=16})}
+ }
+ c.restore();off.toBlob(b=>{const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download=(state.title||"carte").replace(/[^\w-]+/g,"_")+".png";a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)},"image/png");toast("PNG généré")
+};
+
+loadLocal();resize();if(!state.nodes.length){const r=ws.getBoundingClientRect();addNode((r.width/2-state.camera.x)/state.camera.scale,(r.height/2-state.camera.y)/state.camera.scale,null,"Mon idée");fit()}else requestDraw();
+})();
+</script>
+</body>
+</html>
