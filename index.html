@@ -22,6 +22,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
 .hint{position:absolute;right:16px;bottom:16px;color:var(--muted);font-size:12px;background:#10182acc;border:1px solid var(--line);padding:9px 12px;border-radius:10px}
 .empty{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none}.emptyCard{padding:30px 36px;text-align:center;background:#10182dcc;border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow);max-width:440px}.emptyCard h2{margin:0 0 8px}.emptyCard p{margin:0;color:var(--muted);line-height:1.55}.emptyCard kbd{background:#1b2947;border:1px solid var(--line);padding:2px 6px;border-radius:5px;color:#dbe6ff}
 .modalWrap{position:fixed;inset:0;background:#02050aaa;display:none;place-items:center;z-index:50;padding:20px}.modalWrap.open{display:grid}.modal{width:min(520px,100%);background:var(--panel);border:1px solid var(--line);border-radius:18px;box-shadow:0 30px 100px #0009;padding:20px}.modal h3{margin:0 0 18px}.field{margin:13px 0}.field label{display:block;color:var(--muted);font-size:12px;margin-bottom:7px}.field input,.field textarea{width:100%;border:1px solid var(--line);background:#0b1222;color:var(--text);border-radius:10px;padding:11px 12px;outline:none}.field textarea{min-height:110px;resize:vertical}.field input:focus,.field textarea:focus{border-color:var(--accent)}.modalActions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
+.checkboxField{display:flex;align-items:center;gap:10px;margin:15px 0;cursor:pointer}.checkboxField input{width:18px;height:18px;cursor:pointer}
 .toast{position:fixed;right:18px;top:78px;background:#121c32;border:1px solid var(--line);padding:11px 14px;border-radius:10px;box-shadow:var(--shadow);opacity:0;transform:translateY(-8px);transition:.2s;z-index:100;color:#dfe8ff}.toast.show{opacity:1;transform:none}
 @media(max-width:760px){.title{display:none}.actions .label{display:none}.btn{padding:0 10px}.hint{display:none}}
 </style>
@@ -54,7 +55,8 @@ canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
   <div class="modal">
     <h3 id="modalTitle">Modifier la bulle</h3>
     <div class="field"><label>Titre de la bulle</label><input id="nodeText" maxlength="180" placeholder="Ex. Projet, idée, concept…"></div>
-    <div class="field"><label>Description ou Liens (ex: https://google.com)</label><textarea id="nodeNote" maxlength="800" placeholder="Ajoutez un texte long ou un lien..."></textarea></div>
+    <div class="field"><label>Description ou Liens (ex: https://google.com)</label><textarea id="nodeNote" maxlength="800" placeholder="Ajoutez du texte avec **gras**, *italique*, __souligné__, ~~barré~~..."></textarea></div>
+    <label class="checkboxField"><input type="checkbox" id="nodeIsTitle"> <span>Définir comme bulle de titre (texte centré et plus grand)</span></label>
     <div class="field"><label>Image</label><input id="nodeImage" type="file" accept="image/*"></div>
     <div class="modalActions"><button class="btn" id="cancelModal">Annuler</button><button class="btn primary" id="saveModal">Enregistrer</button></div>
   </div>
@@ -123,7 +125,7 @@ function getBezierMidpoint(p1, p2) {
   const dx = p2.x - p1.x;
   const cx1 = p1.x + dx * 0.4;
   const cy1 = p1.y;
-  const cx2 = p2.x - dx * 0.4;
+  const cx2 = p2.x + dx * 0.4;
   const cy2 = p2.y;
   
   const t = 0.5;
@@ -175,7 +177,7 @@ function edgeAt(sx, sy) {
 }
 
 function addNode(x,y,parent=null,text="Nouvelle idée"){
- const n={id:uid(),x,y,w:240,h:86,text,note:"",image:null};state.nodes.push(n);
+ const n={id:uid(),x,y,w:240,h:86,text,note:"",image:null,isTitle:false};state.nodes.push(n);
  if(parent&&!edgeExists(parent.id,n.id))state.edges.push({id:uid(),a:parent.id,b:n.id});
  state.selectedNodes=[n.id];
  state.selectedEdge=null;
@@ -216,41 +218,123 @@ function drawCoverImage(ctx, img, x, y, w, h) {
   ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h);
 }
 
-function getWrappedLines(c, text, maxWidth) {
+// Analyser le formatage texte (Markdown-like)
+function parseFormattedTokens(text) {
   if (!text) return [];
-  const lines = [];
+  const regex = /(\*\*\*[\s\S]+?\*\*\*|\*\*[\s\S]+?\*\*|\*[\s\S]+?\*|_[\s\S]+?_|__[\s\S]+?__|~~[\s\S]+?~~)/g;
+  const parts = text.split(regex);
+  return parts.filter(Boolean).map(part => {
+    if (part.startsWith('***') && part.endsWith('***') && part.length >= 6) {
+      return { text: part.slice(3, -3), bold: true, italic: true };
+    }
+    if (part.startsWith('**') && part.endsWith('**') && part.length >= 4) {
+      return { text: part.slice(2, -2), bold: true };
+    }
+    if ((part.startsWith('*') && part.endsWith('*') && part.length >= 2) ||
+        (part.startsWith('_') && part.endsWith('_') && part.length >= 2)) {
+      return { text: part.slice(1, -1), italic: true };
+    }
+    if (part.startsWith('__') && part.endsWith('__') && part.length >= 4) {
+      return { text: part.slice(2, -2), underline: true };
+    }
+    if (part.startsWith('~~') && part.endsWith('~~') && part.length >= 4) {
+      return { text: part.slice(2, -2), strike: true };
+    }
+    return { text: part };
+  });
+}
+
+function getFormattedLines(c, text, maxWidth, baseFontFamily, baseFontSize, isTitleBold = false) {
+  if (!text) return [];
   const rawLines = String(text).split('\n');
+  const lines = [];
 
   for (const rawLine of rawLines) {
-    const words = rawLine.split(/\s+/);
-    let line = "";
+    const tokens = parseFormattedTokens(rawLine);
+    let currentLine = [];
+    let currentWidth = 0;
 
-    for (const word of words) {
-      if (c.measureText(word).width > maxWidth) {
-        if (line) { lines.push(line); line = ""; }
-        let currentSub = "";
-        for (const char of word) {
-          if (c.measureText(currentSub + char).width > maxWidth) {
-            lines.push(currentSub);
-            currentSub = char;
-          } else {
-            currentSub += char;
-          }
-        }
-        line = currentSub;
-      } else {
-        const test = line ? line + " " + word : word;
-        if (c.measureText(test).width > maxWidth && line) {
-          lines.push(line);
-          line = word;
+    for (const token of tokens) {
+      const words = token.text.split(/(\s+)/);
+      for (const word of words) {
+        const style = {
+          bold: token.bold || isTitleBold,
+          italic: token.italic,
+          underline: token.underline,
+          strike: token.strike,
+          text: word
+        };
+        
+        let fontStyle = "";
+        if (style.italic) fontStyle += "italic ";
+        if (style.bold) fontStyle += "bold ";
+        c.font = `${fontStyle}${baseFontSize}px ${baseFontFamily}`;
+
+        const w = c.measureText(word).width;
+        if (currentWidth + w > maxWidth && currentLine.length > 0 && word.trim() !== "") {
+          lines.push(currentLine);
+          currentLine = [style];
+          currentWidth = w;
         } else {
-          line = test;
+          currentLine.push(style);
+          currentWidth += w;
         }
       }
     }
-    if (line) lines.push(line);
+    if (currentLine.length > 0) lines.push(currentLine);
   }
   return lines;
+}
+
+function drawFormattedLine(c, lineTokens, startX, y, fontSize, fontFamily, align = 'left', boxWidth = 0, defaultColor = '#f2f6ff') {
+  let totalWidth = 0;
+  lineTokens.forEach(t => {
+    let fontStyle = "";
+    if (t.italic) fontStyle += "italic ";
+    if (t.bold) fontStyle += "bold ";
+    c.font = `${fontStyle}${fontSize}px ${fontFamily}`;
+    t.w = c.measureText(t.text).width;
+    totalWidth += t.w;
+  });
+
+  let x = startX;
+  if (align === 'center') {
+    x = startX + (boxWidth - totalWidth) / 2;
+  }
+
+  lineTokens.forEach(t => {
+    let fontStyle = "";
+    if (t.italic) fontStyle += "italic ";
+    if (t.bold) fontStyle += "bold ";
+    c.font = `${fontStyle}${fontSize}px ${fontFamily}`;
+
+    const trimmed = t.text.trim();
+    if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+      c.fillStyle = "#6ea8fe";
+    } else {
+      c.fillStyle = defaultColor;
+    }
+
+    c.fillText(t.text, x, y);
+
+    if (t.underline) {
+      c.beginPath();
+      c.moveTo(x, y + fontSize + 1);
+      c.lineTo(x + t.w, y + fontSize + 1);
+      c.strokeStyle = c.fillStyle;
+      c.lineWidth = 1.2;
+      c.stroke();
+    }
+    if (t.strike) {
+      c.beginPath();
+      c.moveTo(x, y + fontSize / 2);
+      c.lineTo(x + t.w, y + fontSize / 2);
+      c.strokeStyle = c.fillStyle;
+      c.lineWidth = 1.2;
+      c.stroke();
+    }
+    x += t.w;
+  });
 }
 
 function getIntersectionPoint(node, targetX, targetY) {
@@ -349,18 +433,19 @@ function draw(){
  }
 
  for(const n of state.nodes){
-   n.w = 240;
+   n.w = n.isTitle ? 280 : 240;
    const bannerHeight = n.image ? 120 : 0;
    const tw = n.w - 28;
 
-   ctx.font="700 15px Inter,system-ui,sans-serif";
-   const titleLines = getWrappedLines(ctx, n.text || "Sans titre", tw);
-   
-   ctx.font="12px Inter,system-ui,sans-serif";
-   const noteLines = getWrappedLines(ctx, n.note || "", tw);
+   const titleFontSize = n.isTitle ? 19 : 15;
+   const noteFontSize = 12;
+   const fontFamily = "Inter,system-ui,sans-serif";
 
-   const titleHeight = titleLines.length * 20;
-   const noteHeight = noteLines.length * 16;
+   const titleLines = getFormattedLines(ctx, n.text || "Sans titre", tw, fontFamily, titleFontSize, true);
+   const noteLines = getFormattedLines(ctx, n.note || "", tw, fontFamily, noteFontSize, false);
+
+   const titleHeight = titleLines.length * (titleFontSize + 6);
+   const noteHeight = noteLines.length * (noteFontSize + 5);
    const textPadding = 24;
    const contentHeight = bannerHeight + textPadding + titleHeight + (noteLines.length ? 8 + noteHeight : 0);
    
@@ -379,11 +464,11 @@ function draw(){
    }
 
    roundedRect(ctx,x,y,w,h,16);
-   ctx.fillStyle="#141e34";ctx.fill();
+   ctx.fillStyle=n.isTitle ? "#1a2744" : "#141e34";ctx.fill();
    ctx.shadowColor="transparent";
 
-   ctx.lineWidth=isMagnetTarget?3:(sel?2.5:1);
-   ctx.strokeStyle=isMagnetTarget?"#a78bfa":(sel?"#76aafc":"#2a3957");
+   ctx.lineWidth=isMagnetTarget?3:(sel?2.5:(n.isTitle ? 2 : 1));
+   ctx.strokeStyle=isMagnetTarget?"#a78bfa":(sel?"#76aafc":(n.isTitle ? "#6ea8fe" : "#2a3957"));
    ctx.stroke();
 
    if(n.image){
@@ -406,22 +491,19 @@ function draw(){
    
    const textX = x + 14;
    let currentY = y + bannerHeight + 14;
+   const alignMode = n.isTitle ? 'center' : 'left';
 
-   ctx.fillStyle="#f2f6ff";ctx.font="700 15px Inter,system-ui,sans-serif";ctx.textBaseline="top";
-   titleLines.forEach(l => { ctx.fillText(l, textX, currentY); currentY += 20; });
+   ctx.textBaseline = "top";
+   titleLines.forEach(lineTokens => { 
+     drawFormattedLine(ctx, lineTokens, textX, currentY, titleFontSize, fontFamily, alignMode, tw, '#f2f6ff');
+     currentY += titleFontSize + 6; 
+   });
 
    if(noteLines.length){
      currentY += 4;
-     ctx.font="12px Inter,system-ui,sans-serif";
-     noteLines.forEach(l => {
-       const trimmed = l.trim();
-       if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-         ctx.fillStyle = "#6ea8fe";
-       } else {
-         ctx.fillStyle = "#91a0bf";
-       }
-       ctx.fillText(l, textX, currentY); 
-       currentY += 16;
+     noteLines.forEach(lineTokens => {
+       drawFormattedLine(ctx, lineTokens, textX, currentY, noteFontSize, fontFamily, alignMode, tw, '#91a0bf');
+       currentY += noteFontSize + 5;
      });
    }
 
@@ -458,6 +540,7 @@ function openModal(node,mode="edit"){
  $("#modalTitle").textContent=mode==="new"?"Nouveau nœud":"Modifier la bulle";
  $("#nodeText").value=node?.text||"";
  $("#nodeNote").value=node?.note||"";
+ $("#nodeIsTitle").checked=!!node?.isTitle;
  $("#nodeImage").value="";
  $("#modalWrap").classList.add("open");
  setTimeout(()=>$("#nodeText").focus(),30);
@@ -474,7 +557,7 @@ $("#editBtn").onclick=()=>{
 
 $("#nodeImage").addEventListener("change",e=>{const f=e.target.files[0];if(!f)return;if(f.size>5*1024*1024){toast("Image limitée à 5 Mo");e.target.value="";return}const rd=new FileReader();rd.onload=()=>pendingImage=rd.result;rd.readAsDataURL(f)});
 $("#cancelModal").onclick=closeModal;
-$("#saveModal").onclick=()=>{if(!modalNode)return;modalNode.text=$("#nodeText").value.trim()||"Sans titre";modalNode.note=$("#nodeNote").value.trim();if(pendingImage)modalNode.image=pendingImage;saveLocal();requestDraw();closeModal();toast("Bulle enregistrée")};
+$("#saveModal").onclick=()=>{if(!modalNode)return;modalNode.text=$("#nodeText").value.trim()||"Sans titre";modalNode.note=$("#nodeNote").value.trim();modalNode.isTitle=$("#nodeIsTitle").checked;if(pendingImage)modalNode.image=pendingImage;saveLocal();requestDraw();closeModal();toast("Bulle enregistrée")};
 $("#modalWrap").addEventListener("click",e=>{if(e.target.id==="modalWrap")closeModal()});
 
 canvas.addEventListener("dblclick",e=>{
@@ -659,7 +742,13 @@ $("#pngBtn").onclick=()=>{
  for(const n of state.nodes){
    const bannerHeight = n.image ? 120 : 0;
    const x=n.x-n.w/2,y=n.y-n.h/2;
-   roundedRect(c,x,y,n.w,n.h,16);c.fillStyle="#141e34";c.fill();c.strokeStyle="#2a3957";c.lineWidth=1;c.stroke();
+   const titleFontSize = n.isTitle ? 19 : 15;
+   const noteFontSize = 12;
+   const fontFamily = "Inter,system-ui,sans-serif";
+   const tw = n.w - 28;
+   const alignMode = n.isTitle ? 'center' : 'left';
+
+   roundedRect(c,x,y,n.w,n.h,16);c.fillStyle=n.isTitle ? "#1a2744" : "#141e34";c.fill();c.strokeStyle=n.isTitle ? "#6ea8fe" : "#2a3957";c.lineWidth=n.isTitle ? 2 : 1;c.stroke();
    
    if(n.image){
      const img = getCachedImage(n.image);
@@ -672,10 +761,23 @@ $("#pngBtn").onclick=()=>{
      }
    }
    
-   c.fillStyle="#f2f6ff";c.font="700 15px Inter,system-ui,sans-serif";c.textBaseline="top";
+   c.textBaseline="top";
    let cy = y + bannerHeight + 14;
-   getWrappedLines(c,n.text||"Sans titre",n.w-28).forEach(l=>{c.fillText(l,x+14,cy);cy+=20});
-   if(n.note){cy+=4;c.fillStyle="#91a0bf";c.font="12px Inter,system-ui,sans-serif";getWrappedLines(c,n.note,n.w-28).forEach(l=>{c.fillText(l,x+14,cy);cy+=16})}
+
+   const titleLines = getFormattedLines(c, n.text || "Sans titre", tw, fontFamily, titleFontSize, true);
+   titleLines.forEach(lineTokens => {
+     drawFormattedLine(c, lineTokens, x + 14, cy, titleFontSize, fontFamily, alignMode, tw, '#f2f6ff');
+     cy += titleFontSize + 6;
+   });
+
+   if(n.note){
+     cy += 4;
+     const noteLines = getFormattedLines(c, n.note, tw, fontFamily, noteFontSize, false);
+     noteLines.forEach(lineTokens => {
+       drawFormattedLine(c, lineTokens, x + 14, cy, noteFontSize, fontFamily, alignMode, tw, '#91a0bf');
+       cy += noteFontSize + 5;
+     });
+   }
  }
  c.restore();off.toBlob(b=>{const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download=(state.title||"carte").replace(/[^\w-]+/g,"_")+".png";a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)},"image/png");toast("PNG généré")
 };
