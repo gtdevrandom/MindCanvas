@@ -42,11 +42,11 @@ canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
 </header>
 <main class="workspace" id="workspace">
   <canvas id="canvas"></canvas>
-  <div class="empty" id="empty"><div class="emptyCard"><h2>Créez votre carte mentale</h2><p>Double-cliquez pour ajouter ou modifier un nœud. Sélectionnez une bulle puis cliquez sur "Modifier" pour changer son contenu.</p><p style="margin-top:14px"><kbd>Entrée</kbd> enfant · <kbd>Suppr</kbd> supprimer · <kbd>Molette</kbd> zoom · <kbd>Espace + glisser</kbd> déplacer</p></div></div>
+  <div class="empty" id="empty"><div class="emptyCard"><h2>Créez votre carte mentale</h2><p>Double-cliquez pour ajouter ou modifier un nœud. Glissez depuis le bouton (+) d'une bulle vers une autre pour les relier.</p><p style="margin-top:14px"><kbd>Entrée</kbd> enfant · <kbd>Suppr</kbd> supprimer · <kbd>Molette</kbd> zoom · <kbd>Espace + glisser</kbd> déplacer</p></div></div>
   <div class="hud">
     <button id="minus">−</button><div class="zoom" id="zoomLabel">100%</div><button id="plus">+</button><button id="fit">⌖</button>
   </div>
-  <div class="hint">Double-cliquez sur une bulle pour la modifier</div>
+  <div class="hint">Glissez depuis le bouton (+) pour lier deux idées</div>
 </main>
 </div>
 
@@ -70,7 +70,6 @@ let modalMode="edit", modalNode=null, pendingImage=null, toastTimer;
 let clickStart = {x: 0, y: 0};
 let renderPending = false;
 
-// Système de mise en cache d'images pour annuler le lag
 const imageCache = new Map();
 function getCachedImage(src) {
   if (!src) return null;
@@ -100,16 +99,47 @@ function requestDraw() {
 }
 
 function worldPoint(sx,sy){const r=ws.getBoundingClientRect();return{x:(sx-r.left-state.camera.x)/state.camera.scale,y:(sy-r.top-state.camera.y)/state.camera.scale}}
-function nodeAt(sx,sy){const p=worldPoint(sx,sy);for(let i=state.nodes.length-1;i>=0;i--){const n=state.nodes[i],w=n.w||220,h=n.h||86;if(p.x>=n.x-w/2&&p.x<=n.x+w/2&&p.y>=n.y-h/2&&p.y<=n.y+h/2)return n}return null}
+
+function nodeAt(sx,sy){
+  const p=worldPoint(sx,sy);
+  for(let i=state.nodes.length-1;i>=0;i--){
+    const n=state.nodes[i],w=n.w||240,h=n.h||86;
+    if(p.x>=n.x-w/2&&p.x<=n.x+w/2&&p.y>=n.y-h/2&&p.y<=n.y+h/2)return n;
+  }
+  return null;
+}
+
+function isOverHandle(n, sx, sy) {
+  if (!n) return false;
+  const p = worldPoint(sx, sy);
+  const handleX = n.x + n.w / 2;
+  const handleY = n.y;
+  const dist = Math.hypot(p.x - handleX, p.y - handleY);
+  return dist <= 14;
+}
+
 function edgeExists(a,b){return state.edges.some(e=>(e.a===a&&e.b===b)||(e.a===b&&e.b===a))}
 
 function addNode(x,y,parent=null,text="Nouvelle idée"){
- const n={id:uid(),x,y,w:230,h:86,text,note:"",image:null};state.nodes.push(n);
+ const n={id:uid(),x,y,w:240,h:86,text,note:"",image:null};state.nodes.push(n);
  if(parent&&!edgeExists(parent.id,n.id))state.edges.push({id:uid(),a:parent.id,b:n.id});
  state.selected=n.id;saveLocal();requestDraw();return n;
 }
 
-function roundedRect(c,x,y,w,h,r){c.beginPath();c.roundRect(x,y,w,h,r)}
+function roundedRect(c,x,y,w,h,r){
+  if (typeof r === 'number') r = {tl: r, tr: r, br: r, bl: r};
+  c.beginPath();
+  c.moveTo(x + r.tl, y);
+  c.lineTo(x + w - r.tr, y);
+  c.quadraticCurveTo(x + w, y, x + w, y + r.tr);
+  c.lineTo(x + w, y + h - r.br);
+  c.quadraticCurveTo(x + w, y + h, x + w - r.br, y + h);
+  c.lineTo(x + r.bl, y + h);
+  c.quadraticCurveTo(x, y + h, x, y + h - r.bl);
+  c.lineTo(x, y + r.tl);
+  c.quadraticCurveTo(x, y, x + r.tl, y);
+  c.closePath();
+}
 
 function drawCoverImage(ctx, img, x, y, w, h) {
   const imgRatio = img.width / img.height;
@@ -167,27 +197,84 @@ function getWrappedLines(c, text, maxWidth) {
   return lines;
 }
 
-function extractUrls(text) {
-  const urlRegex = /(https?:\/\/[^\s]+)/g;
-  return text.match(urlRegex) || [];
+function getIntersectionPoint(node, targetX, targetY) {
+  const w = node.w / 2;
+  const h = node.h / 2;
+  const dx = targetX - node.x;
+  const dy = targetY - node.y;
+  
+  if (dx === 0 && dy === 0) return { x: node.x, y: node.y };
+
+  const scaleX = Math.abs(w / dx);
+  const scaleY = Math.abs(h / dy);
+  const scale = Math.min(scaleX, scaleY);
+
+  return {
+    x: node.x + dx * scale,
+    y: node.y + dy * scale
+  };
+}
+
+function drawBezierLink(ctx, p1, p2, isHighlighted = false) {
+  const dx = p2.x - p1.x;
+  const dy = p2.y - p1.y;
+  const cx1 = p1.x + dx * 0.4;
+  const cy1 = p1.y;
+  const cx2 = p2.x - dx * 0.4;
+  const cy2 = p2.y;
+
+  ctx.beginPath();
+  ctx.moveTo(p1.x, p1.y);
+  ctx.bezierCurveTo(cx1, cy1, cx2, cy2, p2.x, p2.y);
+  
+  if (isHighlighted) {
+    ctx.strokeStyle = "#8b5cf6";
+    ctx.lineWidth = 4;
+    ctx.shadowColor = "#8b5cf6aa";
+    ctx.shadowBlur = 12;
+  } else {
+    ctx.strokeStyle = "#3b4f74";
+    ctx.lineWidth = 3;
+    ctx.shadowColor = "transparent";
+  }
+  ctx.stroke();
+  ctx.shadowColor = "transparent";
 }
 
 function draw(){
  const r=ws.getBoundingClientRect();ctx.clearRect(0,0,r.width,r.height);
  ctx.save();ctx.translate(state.camera.x,state.camera.y);ctx.scale(state.camera.scale,state.camera.scale);
  
- // Lignes de connexion
- for(const e of state.edges){const a=state.nodes.find(n=>n.id===e.a),b=state.nodes.find(n=>n.id===e.b);if(!a||!b)continue;
-   const dx=b.x-a.x,dy=b.y-a.y,len=Math.hypot(dx,dy)||1;const ox=dx/len*85,oy=dy/len*28;
-   ctx.beginPath();ctx.moveTo(a.x+ox,a.y+oy);ctx.bezierCurveTo((a.x+b.x)/2,a.y,(a.x+b.x)/2,b.y,b.x-ox,b.y-oy);ctx.strokeStyle="#334466";ctx.lineWidth=3;ctx.stroke();
+ // Liaisons existantes
+ for(const e of state.edges){
+   const a=state.nodes.find(n=>n.id===e.a),b=state.nodes.find(n=>n.id===e.b);
+   if(!a||!b)continue;
+   const p1 = getIntersectionPoint(a, b.x, b.y);
+   const p2 = getIntersectionPoint(b, a.x, a.y);
+   drawBezierLink(ctx, p1, p2);
+ }
+
+ // Liaison "Aimantée" en cours de création
+ if (state.drag && state.drag.type === "connect") {
+   const fromNode = state.drag.fromNode;
+   const targetNode = state.drag.targetNode;
+   const startP = { x: fromNode.x + fromNode.w / 2, y: fromNode.y };
+   let endP;
+
+   if (targetNode) {
+     endP = getIntersectionPoint(targetNode, startP.x, startP.y);
+     drawBezierLink(ctx, startP, endP, true);
+   } else {
+     endP = state.drag.currentWorld;
+     drawBezierLink(ctx, startP, endP, true);
+   }
  }
 
  // Bulles (nœuds)
  for(const n of state.nodes){
    n.w = 240;
-   const imgSize = 56;
-   const tx = n.image ? (imgSize + 20) : 14;
-   const tw = n.w - tx - 12;
+   const bannerHeight = n.image ? 120 : 0;
+   const tw = n.w - 28;
 
    ctx.font="700 15px Inter,system-ui,sans-serif";
    const titleLines = getWrappedLines(ctx, n.text || "Sans titre", tw);
@@ -197,38 +284,55 @@ function draw(){
 
    const titleHeight = titleLines.length * 20;
    const noteHeight = noteLines.length * 16;
-   const contentHeight = 24 + titleHeight + (noteLines.length ? 6 + noteHeight : 0);
+   const textPadding = 24;
+   const contentHeight = bannerHeight + textPadding + titleHeight + (noteLines.length ? 8 + noteHeight : 0);
    
-   n.h = Math.max(76, n.image ? Math.max(contentHeight, imgSize + 20) : contentHeight);
+   n.h = Math.max(86, contentHeight);
 
    const x=n.x-n.w/2, y=n.y-n.h/2, w=n.w, h=n.h, sel=n.id===state.selected;
+   const isMagnetTarget = state.drag && state.drag.type === "connect" && state.drag.targetNode?.id === n.id;
 
    ctx.save();
-   ctx.shadowColor=sel?"#6ea8fe55":"#00000055";ctx.shadowBlur=sel?22:14;ctx.shadowOffsetY=7;
-   roundedRect(ctx,x,y,w,h,14);ctx.fillStyle="#141e34";ctx.fill();ctx.shadowColor="transparent";
-   ctx.lineWidth=sel?2.5:1;ctx.strokeStyle=sel?"#76aafc":"#2a3957";ctx.stroke();
    
-   // Affichage image fluide optimisé
+   // Ombres et mise en valeur
+   if (isMagnetTarget) {
+     ctx.shadowColor="#8b5cf6";ctx.shadowBlur=28;ctx.shadowOffsetY=0;
+   } else {
+     ctx.shadowColor=sel?"#6ea8fe66":"#00000066";ctx.shadowBlur=sel?22:14;ctx.shadowOffsetY=7;
+   }
+
+   // Fond du nœud
+   roundedRect(ctx,x,y,w,h,16);
+   ctx.fillStyle="#141e34";ctx.fill();
+   ctx.shadowColor="transparent";
+
+   // Contour du nœud
+   ctx.lineWidth=isMagnetTarget?3:(sel?2.5:1);
+   ctx.strokeStyle=isMagnetTarget?"#a78bfa":(sel?"#76aafc":"#2a3957");
+   ctx.stroke();
+
+   // Affichage grand format supérieur pour les images
    if(n.image){
      const img = getCachedImage(n.image);
      if (img && img.complete) {
        ctx.save();
-       const imgY = y + (h - imgSize) / 2;
-       roundedRect(ctx, x + 10, imgY, imgSize, imgSize, 10);
+       roundedRect(ctx, x, y, w, bannerHeight, {tl: 16, tr: 16, bl: 0, br: 0});
        ctx.clip();
-       drawCoverImage(ctx, img, x + 10, imgY, imgSize, imgSize);
+       drawCoverImage(ctx, img, x, y, w, bannerHeight);
        ctx.restore();
 
-       // Contour élégant sur l'image
-       roundedRect(ctx, x + 10, imgY, imgSize, imgSize, 10);
-       ctx.strokeStyle = "rgba(255,255,255,0.15)";
+       // Ligne de séparation sous l'image
+       ctx.beginPath();
+       ctx.moveTo(x, y + bannerHeight);
+       ctx.lineTo(x + w, y + bannerHeight);
+       ctx.strokeStyle = "rgba(255,255,255,0.1)";
        ctx.lineWidth = 1;
        ctx.stroke();
      }
    }
    
-   const textX = x + tx;
-   let currentY = y + 14;
+   const textX = x + 14;
+   let currentY = y + bannerHeight + 14;
 
    // Titre
    ctx.fillStyle="#f2f6ff";ctx.font="700 15px Inter,system-ui,sans-serif";ctx.textBaseline="top";
@@ -236,7 +340,7 @@ function draw(){
 
    // Description / Liens
    if(noteLines.length){
-     currentY += 2;
+     currentY += 4;
      ctx.font="12px Inter,system-ui,sans-serif";
      noteLines.forEach(l => {
        const trimmed = l.trim();
@@ -249,11 +353,28 @@ function draw(){
        currentY += 16;
      });
    }
+
+   // Bouton aimanté pour créer un lien (+)
+   const handleX = x + w;
+   const handleY = y + h / 2;
+   ctx.beginPath();
+   ctx.arc(handleX, handleY, 10, 0, Math.PI * 2);
+   ctx.fillStyle = sel || isMagnetTarget ? "#8b5cf6" : "#223354";
+   ctx.fill();
+   ctx.lineWidth = 2;
+   ctx.strokeStyle = sel || isMagnetTarget ? "#ffffff" : "#4f6896";
+   ctx.stroke();
+
+   ctx.fillStyle = "#ffffff";
+   ctx.font = "bold 13px system-ui, sans-serif";
+   ctx.textAlign = "center";
+   ctx.textBaseline = "middle";
+   ctx.fillText("+", handleX, handleY);
+
    ctx.restore();
  }
  ctx.restore();
 
- // Afficher ou masquer le bouton de modification dans la barre d'outils
  const selectedNode = state.nodes.find(n => n.id === state.selected);
  $("#editBtn").style.display = selectedNode ? "inline-block" : "none";
 
@@ -285,7 +406,7 @@ $("#cancelModal").onclick=closeModal;
 $("#saveModal").onclick=()=>{if(!modalNode)return;modalNode.text=$("#nodeText").value.trim()||"Sans titre";modalNode.note=$("#nodeNote").value.trim();if(pendingImage)modalNode.image=pendingImage;saveLocal();requestDraw();closeModal();toast("Bulle enregistrée")};
 $("#modalWrap").addEventListener("click",e=>{if(e.target.id==="modalWrap")closeModal()});
 
-// Interaction Canvas
+// Interactions Canvas
 canvas.addEventListener("dblclick",e=>{
   const n=nodeAt(e.clientX,e.clientY);
   if(n) openModal(n, "edit");
@@ -298,20 +419,68 @@ canvas.addEventListener("dblclick",e=>{
 canvas.addEventListener("pointerdown",e=>{
  const n=nodeAt(e.clientX,e.clientY);canvas.setPointerCapture(e.pointerId);
  clickStart = {x: e.clientX, y: e.clientY};
+
+ // Détecter clic/glisser sur l'ancrage aimanté (+)
+ for (let i = state.nodes.length - 1; i >= 0; i--) {
+   const node = state.nodes[i];
+   if (isOverHandle(node, e.clientX, e.clientY)) {
+     state.drag = {
+       type: "connect",
+       fromNode: node,
+       targetNode: null,
+       currentWorld: worldPoint(e.clientX, e.clientY)
+     };
+     requestDraw();
+     return;
+   }
+ }
+
  if(e.button===1||state.space||(!n&&e.button===0)){
-   state.drag={type:"pan",sx:e.clientX,sy:e.clientY,cx:state.camera.x,cy:state.camera.y};
-   state.selected = null;
-   requestDraw();
-   return;
+    state.drag={type:"pan",sx:e.clientX,sy:e.clientY,cx:state.camera.x,cy:state.camera.y};
+    state.selected = null;
+    requestDraw();
+    return;
  }
  if(n){state.selected=n.id;state.drag={type:"node",n,sx:e.clientX,sy:e.clientY,x:n.x,y:n.y};requestDraw()}
 });
 
-canvas.addEventListener("pointermove",e=>{if(!state.drag)return;if(state.drag.type==="pan"){state.camera.x=state.drag.cx+e.clientX-state.drag.sx;state.camera.y=state.drag.cy+e.clientY-state.drag.sy}else{const d=state.drag,n=d.n; n.x=d.x+(e.clientX-d.sx)/state.camera.scale;n.y=d.y+(e.clientY-d.sy)/state.camera.scale}requestDraw()});
+canvas.addEventListener("pointermove",e=>{
+  if(!state.drag)return;
+  if(state.drag.type==="pan"){
+    state.camera.x=state.drag.cx+e.clientX-state.drag.sx;
+    state.camera.y=state.drag.cy+e.clientY-state.drag.sy;
+  } else if(state.drag.type==="node") {
+    const d=state.drag,n=d.n; 
+    n.x=d.x+(e.clientX-d.sx)/state.camera.scale;
+    n.y=d.y+(e.clientY-d.sy)/state.camera.scale;
+  } else if(state.drag.type==="connect") {
+    const wP = worldPoint(e.clientX, e.clientY);
+    state.drag.currentWorld = wP;
+    
+    // Effet d'aimant si survol d'une autre bulle
+    const hoveredNode = nodeAt(e.clientX, e.clientY);
+    if (hoveredNode && hoveredNode.id !== state.drag.fromNode.id) {
+      state.drag.targetNode = hoveredNode;
+    } else {
+      state.drag.targetNode = null;
+    }
+  }
+  requestDraw();
+});
 
 canvas.addEventListener("pointerup",e=>{
  if(state.drag){
-   saveLocal();state.drag=null;
+    if (state.drag.type === "connect" && state.drag.fromNode && state.drag.targetNode) {
+      const a = state.drag.fromNode.id;
+      const b = state.drag.targetNode.id;
+      if (!edgeExists(a, b)) {
+        state.edges.push({ id: uid(), a, b });
+        toast("Idées reliées !");
+      }
+    }
+    saveLocal();
+    state.drag=null;
+    requestDraw();
  }
 });
 
@@ -321,7 +490,7 @@ window.addEventListener("keydown",e=>{
  if(e.code==="Space")state.space=true;
  if($("#modalWrap").classList.contains("open")){if(e.key==="Escape")closeModal();return}
  if(e.key==="Delete"||e.key==="Backspace"){const n=state.nodes.find(n=>n.id===state.selected);if(n){state.nodes=state.nodes.filter(x=>x.id!==n.id);state.edges=state.edges.filter(x=>x.a!==n.id&&x.b!==n.id);state.selected=null;saveLocal();requestDraw();toast("Nœud supprimé")}}
- if(e.key==="Enter"&&state.selected){const p=state.nodes.find(n=>n.id===state.selected);addNode(p.x+220,p.y+110,p);openModal(state.nodes.at(-1),"new")}
+ if(e.key==="Enter"&&state.selected){const p=state.nodes.find(n=>n.id===state.selected);addNode(p.x+260,p.y+110,p);openModal(state.nodes.at(-1),"new")}
 });
 
 window.addEventListener("keyup",e=>{if(e.code==="Space")state.space=false});
@@ -337,27 +506,35 @@ $("#pngBtn").onclick=()=>{
  if(!state.nodes.length){toast("Ajoutez au moins un nœud");return}
  const minX=Math.min(...state.nodes.map(n=>n.x-n.w/2))-60,maxX=Math.max(...state.nodes.map(n=>n.x+n.w/2))+60,minY=Math.min(...state.nodes.map(n=>n.y-n.h/2))-60,maxY=Math.max(...state.nodes.map(n=>n.y+n.h/2))+60;
  const scale=2,w=Math.ceil((maxX-minX)*scale),h=Math.ceil((maxY-minY)*scale),off=document.createElement("canvas");off.width=w;off.height=h;const c=off.getContext("2d");c.fillStyle="#0b1020";c.fillRect(0,0,w,h);c.save();c.scale(scale,scale);c.translate(-minX,-minY);
- for(const e of state.edges){const a=state.nodes.find(n=>n.id===e.a),b=state.nodes.find(n=>n.id===e.b);if(!a||!b)continue;const dx=b.x-a.x,dy=b.y-a.y,len=Math.hypot(dx,dy)||1,ox=dx/len*85,oy=dy/len*28;c.beginPath();c.moveTo(a.x+ox,a.y+oy);c.bezierCurveTo((a.x+b.x)/2,a.y,(a.x+b.x)/2,b.y,b.x-ox,b.y-oy);c.strokeStyle="#41577d";c.lineWidth=3;c.stroke()}
+ 
+ for(const e of state.edges){
+   const a=state.nodes.find(n=>n.id===e.a),b=state.nodes.find(n=>n.id===e.b);
+   if(!a||!b)continue;
+   const p1 = getIntersectionPoint(a, b.x, b.y);
+   const p2 = getIntersectionPoint(b, a.x, a.y);
+   drawBezierLink(c, p1, p2);
+ }
+
  for(const n of state.nodes){
+   const bannerHeight = n.image ? 120 : 0;
    const x=n.x-n.w/2,y=n.y-n.h/2;
-   roundedRect(c,x,y,n.w,n.h,14);c.fillStyle="#141e34";c.fill();c.strokeStyle="#2f4265";c.lineWidth=1;c.stroke();
+   roundedRect(c,x,y,n.w,n.h,16);c.fillStyle="#141e34";c.fill();c.strokeStyle="#2a3957";c.lineWidth=1;c.stroke();
    
    if(n.image){
      const img = getCachedImage(n.image);
      if(img && img.complete) {
        c.save();
-       roundedRect(c, x+10, y+(n.h-56)/2, 56, 56, 10);
+       roundedRect(c, x, y, n.w, bannerHeight, {tl: 16, tr: 16, bl: 0, br: 0});
        c.clip();
-       drawCoverImage(c, img, x+10, y+(n.h-56)/2, 56, 56);
+       drawCoverImage(c, img, x, y, n.w, bannerHeight);
        c.restore();
      }
    }
    
    c.fillStyle="#f2f6ff";c.font="700 15px Inter,system-ui,sans-serif";c.textBaseline="top";
-   let cy = y + 14;
-   const tx = n.image ? 76 : 14;
-   getWrappedLines(c,n.text||"Sans titre",n.w-tx-12).forEach(l=>{c.fillText(l,x+tx,cy);cy+=20});
-   if(n.note){cy+=2;c.fillStyle="#91a0bf";c.font="12px Inter,system-ui,sans-serif";getWrappedLines(c,n.note,n.w-tx-12).forEach(l=>{c.fillText(l,x+tx,cy);cy+=16})}
+   let cy = y + bannerHeight + 14;
+   getWrappedLines(c,n.text||"Sans titre",n.w-28).forEach(l=>{c.fillText(l,x+14,cy);cy+=20});
+   if(n.note){cy+=4;c.fillStyle="#91a0bf";c.font="12px Inter,system-ui,sans-serif";getWrappedLines(c,n.note,n.w-28).forEach(l=>{c.fillText(l,x+14,cy);cy+=16})}
  }
  c.restore();off.toBlob(b=>{const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download=(state.title||"carte").replace(/[^\w-]+/g,"_")+".png";a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)},"image/png");toast("PNG généré")
 };
