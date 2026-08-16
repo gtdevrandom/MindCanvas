@@ -42,11 +42,11 @@ canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
 </header>
 <main class="workspace" id="workspace">
   <canvas id="canvas"></canvas>
-  <div class="empty" id="empty"><div class="emptyCard"><h2>Créez votre carte mentale</h2><p>Double-cliquez pour ajouter ou modifier un nœud. Glissez depuis le bouton (+) d'une bulle vers une autre pour les relier.</p><p style="margin-top:14px"><kbd>Entrée</kbd> enfant · <kbd>Suppr</kbd> supprimer · <kbd>Molette</kbd> zoom · <kbd>Espace + glisser</kbd> déplacer</p></div></div>
+  <div class="empty" id="empty"><div class="emptyCard"><h2>Créez votre carte mentale</h2><p>Double-cliquez pour ajouter un nœud. Glissez depuis le bouton (+) d'une bulle pour relier.</p><p style="margin-top:14px"><kbd>Ctrl + Clic</kbd> Sélection multiple · <kbd>Suppr</kbd> Supprimer sélection/lien</p></div></div>
   <div class="hud">
     <button id="minus">−</button><div class="zoom" id="zoomLabel">100%</div><button id="plus">+</button><button id="fit">⌖</button>
   </div>
-  <div class="hint">Glissez depuis le bouton (+) pour lier deux idées</div>
+  <div class="hint">Maintenez <b>Ctrl</b> pour sélectionner & déplacer plusieurs bulles | Clic sur un lien pour le supprimer</div>
 </main>
 </div>
 
@@ -64,10 +64,9 @@ canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
 <script>
 (() => {
 const $=s=>document.querySelector(s), canvas=$("#canvas"), ctx=canvas.getContext("2d"), ws=$("#workspace");
-const state={version:1,title:"Nouvelle carte",nodes:[],edges:[],camera:{x:0,y:0,scale:1},selected:null,drag:null,space:false};
+const state={version:1,title:"Nouvelle carte",nodes:[],edges:[],camera:{x:0,y:0,scale:1},selectedNodes:[],selectedEdge:null,drag:null,space:false};
 const KEY="mindcanvas-v1";
 let modalMode="edit", modalNode=null, pendingImage=null, toastTimer;
-let clickStart = {x: 0, y: 0};
 let renderPending = false;
 
 const imageCache = new Map();
@@ -83,7 +82,7 @@ function getCachedImage(src) {
 
 function uid(){return crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)+Math.random().toString(36).slice(2)}
 function saveLocal(){localStorage.setItem(KEY,JSON.stringify({version:1,title:state.title,nodes:state.nodes,edges:state.edges,camera:state.camera}));}
-function loadLocal(){try{const d=JSON.parse(localStorage.getItem(KEY)); if(d?.nodes){Object.assign(state,{...state,...d,selected:null,drag:null});}}catch{}}
+function loadLocal(){try{const d=JSON.parse(localStorage.getItem(KEY)); if(d?.nodes){Object.assign(state,{...state,...d,selectedNodes:[],selectedEdge:null,drag:null});}}catch{}}
 function toast(t){const e=$("#toast");e.textContent=t;e.classList.add("show");clearTimeout(toastTimer);toastTimer=setTimeout(()=>e.classList.remove("show"),1800)}
 function resize(){const r=ws.getBoundingClientRect(),d=devicePixelRatio||1;canvas.width=r.width*d;canvas.height=r.height*d;canvas.style.width=r.width+"px";canvas.style.height=r.height+"px";ctx.setTransform(d,0,0,d,0,0);requestDraw()}
 window.addEventListener("resize",resize);
@@ -120,10 +119,67 @@ function isOverHandle(n, sx, sy) {
 
 function edgeExists(a,b){return state.edges.some(e=>(e.a===a&&e.b===b)||(e.a===b&&e.b===a))}
 
+function getBezierMidpoint(p1, p2) {
+  const dx = p2.x - p1.x;
+  const cx1 = p1.x + dx * 0.4;
+  const cy1 = p1.y;
+  const cx2 = p2.x - dx * 0.4;
+  const cy2 = p2.y;
+  
+  const t = 0.5;
+  const mt = 1 - t;
+  const x = mt*mt*mt*p1.x + 3*mt*mt*t*cx1 + 3*mt*t*t*cx2 + t*t*t*p2.x;
+  const y = mt*mt*mt*p1.y + 3*mt*mt*t*cy1 + 3*mt*t*t*cy2 + t*t*t*p2.y;
+  return { x, y };
+}
+
+function isOverDeleteEdgeBtn(edge, sx, sy) {
+  const a = state.nodes.find(n => n.id === edge.a);
+  const b = state.nodes.find(n => n.id === edge.b);
+  if (!a || !b) return false;
+  const p1 = getIntersectionPoint(a, b.x, b.y);
+  const p2 = getIntersectionPoint(b, a.x, a.y);
+  const mid = getBezierMidpoint(p1, p2);
+  const p = worldPoint(sx, sy);
+  return Math.hypot(p.x - mid.x, p.y - mid.y) <= 16;
+}
+
+function edgeAt(sx, sy) {
+  const p = worldPoint(sx, sy);
+  for (const e of state.edges) {
+    const a = state.nodes.find(n => n.id === e.a);
+    const b = state.nodes.find(n => n.id === e.b);
+    if (!a || !b) continue;
+
+    const p1 = getIntersectionPoint(a, b.x, b.y);
+    const p2 = getIntersectionPoint(b, a.x, a.y);
+
+    const dx = p2.x - p1.x;
+    const cx1 = p1.x + dx * 0.4;
+    const cy1 = p1.y;
+    const cx2 = p2.x - dx * 0.4;
+    const cy2 = p2.y;
+
+    const steps = 30;
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const mt = 1 - t;
+      const x = mt*mt*mt*p1.x + 3*mt*mt*t*cx1 + 3*mt*t*t*cx2 + t*t*t*p2.x;
+      const y = mt*mt*mt*p1.y + 3*mt*mt*t*cy1 + 3*mt*t*t*cy2 + t*t*t*p2.y;
+      if (Math.hypot(p.x - x, p.y - y) < 14) {
+        return e;
+      }
+    }
+  }
+  return null;
+}
+
 function addNode(x,y,parent=null,text="Nouvelle idée"){
  const n={id:uid(),x,y,w:240,h:86,text,note:"",image:null};state.nodes.push(n);
  if(parent&&!edgeExists(parent.id,n.id))state.edges.push({id:uid(),a:parent.id,b:n.id});
- state.selected=n.id;saveLocal();requestDraw();return n;
+ state.selectedNodes=[n.id];
+ state.selectedEdge=null;
+ saveLocal();requestDraw();return n;
 }
 
 function roundedRect(c,x,y,w,h,r){
@@ -215,9 +271,8 @@ function getIntersectionPoint(node, targetX, targetY) {
   };
 }
 
-function drawBezierLink(ctx, p1, p2, isHighlighted = false) {
+function drawBezierLink(ctx, p1, p2, isHighlighted = false, isSelected = false) {
   const dx = p2.x - p1.x;
-  const dy = p2.y - p1.y;
   const cx1 = p1.x + dx * 0.4;
   const cy1 = p1.y;
   const cx2 = p2.x - dx * 0.4;
@@ -227,7 +282,12 @@ function drawBezierLink(ctx, p1, p2, isHighlighted = false) {
   ctx.moveTo(p1.x, p1.y);
   ctx.bezierCurveTo(cx1, cy1, cx2, cy2, p2.x, p2.y);
   
-  if (isHighlighted) {
+  if (isSelected) {
+    ctx.strokeStyle = "#ff6b81";
+    ctx.lineWidth = 5;
+    ctx.shadowColor = "#ff6b81aa";
+    ctx.shadowBlur = 14;
+  } else if (isHighlighted) {
     ctx.strokeStyle = "#8b5cf6";
     ctx.lineWidth = 4;
     ctx.shadowColor = "#8b5cf6aa";
@@ -239,22 +299,40 @@ function drawBezierLink(ctx, p1, p2, isHighlighted = false) {
   }
   ctx.stroke();
   ctx.shadowColor = "transparent";
+
+  if (isSelected) {
+    const mid = getBezierMidpoint(p1, p2);
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(mid.x, mid.y, 13, 0, Math.PI * 2);
+    ctx.fillStyle = "#ff6b81";
+    ctx.fill();
+    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = "#ffffff";
+    ctx.stroke();
+
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 15px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("×", mid.x, mid.y);
+    ctx.restore();
+  }
 }
 
 function draw(){
  const r=ws.getBoundingClientRect();ctx.clearRect(0,0,r.width,r.height);
  ctx.save();ctx.translate(state.camera.x,state.camera.y);ctx.scale(state.camera.scale,state.camera.scale);
  
- // Liaisons existantes
  for(const e of state.edges){
    const a=state.nodes.find(n=>n.id===e.a),b=state.nodes.find(n=>n.id===e.b);
    if(!a||!b)continue;
    const p1 = getIntersectionPoint(a, b.x, b.y);
    const p2 = getIntersectionPoint(b, a.x, a.y);
-   drawBezierLink(ctx, p1, p2);
+   const isSelected = state.selectedEdge && state.selectedEdge.id === e.id;
+   drawBezierLink(ctx, p1, p2, false, isSelected);
  }
 
- // Liaison "Aimantée" en cours de création
  if (state.drag && state.drag.type === "connect") {
    const fromNode = state.drag.fromNode;
    const targetNode = state.drag.targetNode;
@@ -270,7 +348,6 @@ function draw(){
    }
  }
 
- // Bulles (nœuds)
  for(const n of state.nodes){
    n.w = 240;
    const bannerHeight = n.image ? 120 : 0;
@@ -289,29 +366,26 @@ function draw(){
    
    n.h = Math.max(86, contentHeight);
 
-   const x=n.x-n.w/2, y=n.y-n.h/2, w=n.w, h=n.h, sel=n.id===state.selected;
+   const x=n.x-n.w/2, y=n.y-n.h/2, w=n.w, h=n.h;
+   const sel = state.selectedNodes.includes(n.id);
    const isMagnetTarget = state.drag && state.drag.type === "connect" && state.drag.targetNode?.id === n.id;
 
    ctx.save();
    
-   // Ombres et mise en valeur
    if (isMagnetTarget) {
      ctx.shadowColor="#8b5cf6";ctx.shadowBlur=28;ctx.shadowOffsetY=0;
    } else {
      ctx.shadowColor=sel?"#6ea8fe66":"#00000066";ctx.shadowBlur=sel?22:14;ctx.shadowOffsetY=7;
    }
 
-   // Fond du nœud
    roundedRect(ctx,x,y,w,h,16);
    ctx.fillStyle="#141e34";ctx.fill();
    ctx.shadowColor="transparent";
 
-   // Contour du nœud
    ctx.lineWidth=isMagnetTarget?3:(sel?2.5:1);
    ctx.strokeStyle=isMagnetTarget?"#a78bfa":(sel?"#76aafc":"#2a3957");
    ctx.stroke();
 
-   // Affichage grand format supérieur pour les images
    if(n.image){
      const img = getCachedImage(n.image);
      if (img && img.complete) {
@@ -321,7 +395,6 @@ function draw(){
        drawCoverImage(ctx, img, x, y, w, bannerHeight);
        ctx.restore();
 
-       // Ligne de séparation sous l'image
        ctx.beginPath();
        ctx.moveTo(x, y + bannerHeight);
        ctx.lineTo(x + w, y + bannerHeight);
@@ -334,11 +407,9 @@ function draw(){
    const textX = x + 14;
    let currentY = y + bannerHeight + 14;
 
-   // Titre
    ctx.fillStyle="#f2f6ff";ctx.font="700 15px Inter,system-ui,sans-serif";ctx.textBaseline="top";
    titleLines.forEach(l => { ctx.fillText(l, textX, currentY); currentY += 20; });
 
-   // Description / Liens
    if(noteLines.length){
      currentY += 4;
      ctx.font="12px Inter,system-ui,sans-serif";
@@ -354,7 +425,6 @@ function draw(){
      });
    }
 
-   // Bouton aimanté pour créer un lien (+)
    const handleX = x + w;
    const handleY = y + h / 2;
    ctx.beginPath();
@@ -375,8 +445,7 @@ function draw(){
  }
  ctx.restore();
 
- const selectedNode = state.nodes.find(n => n.id === state.selected);
- $("#editBtn").style.display = selectedNode ? "inline-block" : "none";
+ $("#editBtn").style.display = state.selectedNodes.length === 1 ? "inline-block" : "none";
 
  $("#empty").style.display=state.nodes.length?"none":"grid";
  $("#zoomLabel").textContent=Math.round(state.camera.scale*100)+"%";$("#docTitle").textContent=state.title;
@@ -397,8 +466,10 @@ function openModal(node,mode="edit"){
 function closeModal(){$("#modalWrap").classList.remove("open");modalNode=null;pendingImage=null}
 
 $("#editBtn").onclick=()=>{
-  const n = state.nodes.find(n => n.id === state.selected);
-  if(n) openModal(n, "edit");
+  if(state.selectedNodes.length === 1) {
+    const n = state.nodes.find(n => n.id === state.selectedNodes[0]);
+    if(n) openModal(n, "edit");
+  }
 };
 
 $("#nodeImage").addEventListener("change",e=>{const f=e.target.files[0];if(!f)return;if(f.size>5*1024*1024){toast("Image limitée à 5 Mo");e.target.value="";return}const rd=new FileReader();rd.onload=()=>pendingImage=rd.result;rd.readAsDataURL(f)});
@@ -406,7 +477,6 @@ $("#cancelModal").onclick=closeModal;
 $("#saveModal").onclick=()=>{if(!modalNode)return;modalNode.text=$("#nodeText").value.trim()||"Sans titre";modalNode.note=$("#nodeNote").value.trim();if(pendingImage)modalNode.image=pendingImage;saveLocal();requestDraw();closeModal();toast("Bulle enregistrée")};
 $("#modalWrap").addEventListener("click",e=>{if(e.target.id==="modalWrap")closeModal()});
 
-// Interactions Canvas
 canvas.addEventListener("dblclick",e=>{
   const n=nodeAt(e.clientX,e.clientY);
   if(n) openModal(n, "edit");
@@ -418,9 +488,19 @@ canvas.addEventListener("dblclick",e=>{
 
 canvas.addEventListener("pointerdown",e=>{
  const n=nodeAt(e.clientX,e.clientY);canvas.setPointerCapture(e.pointerId);
- clickStart = {x: e.clientX, y: e.clientY};
+ const isCtrl = e.ctrlKey || e.metaKey;
 
- // Détecter clic/glisser sur l'ancrage aimanté (+)
+ // 1. Clic sur le bouton de suppression du lien
+ if (state.selectedEdge && isOverDeleteEdgeBtn(state.selectedEdge, e.clientX, e.clientY)) {
+   state.edges = state.edges.filter(edge => edge.id !== state.selectedEdge.id);
+   state.selectedEdge = null;
+   saveLocal();
+   requestDraw();
+   toast("Lien supprimé");
+   return;
+ }
+
+ // 2. Clic sur le bouton (+) pour créer un lien
  for (let i = state.nodes.length - 1; i >= 0; i--) {
    const node = state.nodes[i];
    if (isOverHandle(node, e.clientX, e.clientY)) {
@@ -430,18 +510,56 @@ canvas.addEventListener("pointerdown",e=>{
        targetNode: null,
        currentWorld: worldPoint(e.clientX, e.clientY)
      };
+     state.selectedEdge = null;
      requestDraw();
      return;
    }
  }
 
- if(e.button===1||state.space||(!n&&e.button===0)){
+ // 3. Déplacer le canevas (clic milieu, espace ou clic dans le vide sans Ctrl)
+ const clickedEdge = edgeAt(e.clientX, e.clientY);
+ if(e.button===1 || state.space || (!n && !clickedEdge && e.button===0 && !isCtrl)){
     state.drag={type:"pan",sx:e.clientX,sy:e.clientY,cx:state.camera.x,cy:state.camera.y};
-    state.selected = null;
+    if(!isCtrl){
+      state.selectedNodes = [];
+      state.selectedEdge = null;
+    }
     requestDraw();
     return;
  }
- if(n){state.selected=n.id;state.drag={type:"node",n,sx:e.clientX,sy:e.clientY,x:n.x,y:n.y};requestDraw()}
+
+ // 4. Clic sur une bulle
+ if(n){
+   if(isCtrl){
+     if(state.selectedNodes.includes(n.id)){
+       state.selectedNodes = state.selectedNodes.filter(id => id !== n.id);
+     } else {
+       state.selectedNodes.push(n.id);
+     }
+   } else {
+     if(!state.selectedNodes.includes(n.id)){
+       state.selectedNodes = [n.id];
+     }
+   }
+   state.selectedEdge = null;
+
+   // Préparer le déplacement du groupe sélectionné
+   const initPositions = new Map();
+   state.nodes.forEach(node => {
+     if(state.selectedNodes.includes(node.id)){
+       initPositions.set(node.id, {x: node.x, y: node.y});
+     }
+   });
+
+   state.drag={type:"node",sx:e.clientX,sy:e.clientY,initPositions};
+   requestDraw();
+ } 
+ // 5. Clic sur un lien entre deux bulles
+ else if(clickedEdge) {
+   if(!isCtrl) state.selectedNodes = [];
+   state.selectedEdge = clickedEdge;
+   requestDraw();
+ }
 });
 
 canvas.addEventListener("pointermove",e=>{
@@ -450,14 +568,19 @@ canvas.addEventListener("pointermove",e=>{
     state.camera.x=state.drag.cx+e.clientX-state.drag.sx;
     state.camera.y=state.drag.cy+e.clientY-state.drag.sy;
   } else if(state.drag.type==="node") {
-    const d=state.drag,n=d.n; 
-    n.x=d.x+(e.clientX-d.sx)/state.camera.scale;
-    n.y=d.y+(e.clientY-d.sy)/state.camera.scale;
+    const dx = (e.clientX - state.drag.sx) / state.camera.scale;
+    const dy = (e.clientY - state.drag.sy) / state.camera.scale;
+    state.nodes.forEach(node => {
+      if(state.drag.initPositions.has(node.id)){
+        const initP = state.drag.initPositions.get(node.id);
+        node.x = initP.x + dx;
+        node.y = initP.y + dy;
+      }
+    });
   } else if(state.drag.type==="connect") {
     const wP = worldPoint(e.clientX, e.clientY);
     state.drag.currentWorld = wP;
     
-    // Effet d'aimant si survol d'une autre bulle
     const hoveredNode = nodeAt(e.clientX, e.clientY);
     if (hoveredNode && hoveredNode.id !== state.drag.fromNode.id) {
       state.drag.targetNode = hoveredNode;
@@ -489,17 +612,35 @@ canvas.addEventListener("wheel",e=>{e.preventDefault();const before=worldPoint(e
 window.addEventListener("keydown",e=>{
  if(e.code==="Space")state.space=true;
  if($("#modalWrap").classList.contains("open")){if(e.key==="Escape")closeModal();return}
- if(e.key==="Delete"||e.key==="Backspace"){const n=state.nodes.find(n=>n.id===state.selected);if(n){state.nodes=state.nodes.filter(x=>x.id!==n.id);state.edges=state.edges.filter(x=>x.a!==n.id&&x.b!==n.id);state.selected=null;saveLocal();requestDraw();toast("Nœud supprimé")}}
- if(e.key==="Enter"&&state.selected){const p=state.nodes.find(n=>n.id===state.selected);addNode(p.x+260,p.y+110,p);openModal(state.nodes.at(-1),"new")}
+ 
+ // Suppression avec Suppr / Backspace
+ if(e.key==="Delete"||e.key==="Backspace"){
+   if(state.selectedEdge) {
+     state.edges = state.edges.filter(x => x.id !== state.selectedEdge.id);
+     state.selectedEdge = null;
+     saveLocal();
+     requestDraw();
+     toast("Lien supprimé");
+   } else if(state.selectedNodes.length > 0) {
+     const idsToDelete = new Set(state.selectedNodes);
+     state.nodes = state.nodes.filter(n => !idsToDelete.has(n.id));
+     state.edges = state.edges.filter(e => !idsToDelete.has(e.a) && !idsToDelete.has(e.b));
+     state.selectedNodes = [];
+     saveLocal();
+     requestDraw();
+     toast("Sélection supprimée");
+   }
+ }
+ if(e.key==="Enter"&&state.selectedNodes.length===1){const p=state.nodes.find(n=>n.id===state.selectedNodes[0]);addNode(p.x+260,p.y+110,p);openModal(state.nodes.at(-1),"new")}
 });
 
 window.addEventListener("keyup",e=>{if(e.code==="Space")state.space=false});
 $("#plus").onclick=()=>{state.camera.scale=Math.min(3,state.camera.scale*1.15);requestDraw();saveLocal()};
 $("#minus").onclick=()=>{state.camera.scale=Math.max(.25,state.camera.scale/1.15);requestDraw();saveLocal()};
 $("#fit").onclick=fit;
-$("#newBtn").onclick=()=>{if(state.nodes.length&&!confirm("Créer une nouvelle carte ?"))return;state.title="Nouvelle carte";state.nodes=[];state.edges=[];state.selected=null;state.camera={x:0,y:0,scale:1};saveLocal();requestDraw()};
+$("#newBtn").onclick=()=>{if(state.nodes.length&&!confirm("Créer une nouvelle carte ?"))return;state.title="Nouvelle carte";state.nodes=[];state.edges=[];state.selectedNodes=[];state.selectedEdge=null;state.camera={x:0,y:0,scale:1};saveLocal();requestDraw()};
 $("#importBtn").onclick=()=>$("#fileJson").click();
-$("#fileJson").onchange=e=>{const f=e.target.files[0];if(!f)return;const rd=new FileReader();rd.onload=()=>{try{const d=JSON.parse(rd.result);if(!Array.isArray(d.nodes)||!Array.isArray(d.edges))throw 0;state.title=d.title||"Carte importée";state.nodes=d.nodes;state.edges=d.edges;state.camera=d.camera||{x:0,y:0,scale:1};state.selected=null;saveLocal();requestDraw();toast("Carte importée")}catch{toast("JSON invalide")}};rd.readAsText(f);e.target.value=""};
+$("#fileJson").onchange=e=>{const f=e.target.files[0];if(!f)return;const rd=new FileReader();rd.onload=()=>{try{const d=JSON.parse(rd.result);if(!Array.isArray(d.nodes)||!Array.isArray(d.edges))throw 0;state.title=d.title||"Carte importée";state.nodes=d.nodes;state.edges=d.edges;state.camera=d.camera||{x:0,y:0,scale:1};state.selectedNodes=[];state.selectedEdge=null;saveLocal();requestDraw();toast("Carte importée")}catch{toast("JSON invalide")}};rd.readAsText(f);e.target.value=""};
 function download(name,data,type){const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([data],{type}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
 $("#exportJsonBtn").onclick=()=>{const data={format:"MindCanvas",version:1,title:state.title,nodes:state.nodes,edges:state.edges,camera:state.camera};download((state.title||"carte").replace(/[^\w-]+/g,"_")+".json",JSON.stringify(data,null,2),"application/json");toast("JSON téléchargé")};
 $("#pngBtn").onclick=()=>{
