@@ -55,7 +55,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
   <div class="modal">
     <h3 id="modalTitle">Modifier la bulle</h3>
     <div class="field"><label>Titre de la bulle</label><input id="nodeText" maxlength="180" placeholder="Ex. Projet, idée, concept…"></div>
-    <div class="field"><label>Description ou Liens (ex: https://google.com)</label><textarea id="nodeNote" maxlength="800" placeholder="Ajoutez du texte avec **gras**, *italique*, __souligné__, ~~barré~~..."></textarea></div>
+    <div class="field"><label>Description ou Liens (ex: [Mon site](https://google.com))</label><textarea id="nodeNote" maxlength="800" placeholder="Utilisez [Texte](URL) ou du texte avec **gras**, *italique*, __souligné__, ~~barré~~..."></textarea></div>
     <label class="checkboxField"><input type="checkbox" id="nodeIsTitle"> <span>Définir comme bulle de titre (texte centré et plus grand)</span></label>
     <div class="field"><label>Image</label><input id="nodeImage" type="file" accept="image/*"></div>
     <div class="modalActions"><button class="btn" id="cancelModal">Annuler</button><button class="btn primary" id="saveModal">Enregistrer</button></div>
@@ -70,6 +70,7 @@ const state={version:1,title:"Nouvelle carte",nodes:[],edges:[],camera:{x:0,y:0,
 const KEY="mindcanvas-v1";
 let modalMode="edit", modalNode=null, pendingImage=null, toastTimer;
 let renderPending = false;
+let clickHitRegions = [];
 
 const imageCache = new Map();
 function getCachedImage(src) {
@@ -159,7 +160,7 @@ function edgeAt(sx, sy) {
     const dx = p2.x - p1.x;
     const cx1 = p1.x + dx * 0.4;
     const cy1 = p1.y;
-    const cx2 = p2.x - dx * 0.4;
+    const cx2 = p2.x + dx * 0.4;
     const cy2 = p2.y;
 
     const steps = 30;
@@ -218,12 +219,16 @@ function drawCoverImage(ctx, img, x, y, w, h) {
   ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h);
 }
 
-// Analyser le formatage texte (Markdown-like)
+// Analyser le formatage Markdown y compris les liens [texte](url)
 function parseFormattedTokens(text) {
   if (!text) return [];
-  const regex = /(\*\*\*[\s\S]+?\*\*\*|\*\*[\s\S]+?\*\*|\*[\s\S]+?\*|_[\s\S]+?_|__[\s\S]+?__|~~[\s\S]+?~~)/g;
+  const regex = /(\[.*?\]\(.*?\)|(?:\*\*\*[\s\S]+?\*\*\*|\*\*[\s\S]+?\*\*|\*[\s\S]+?\*|_[\s\S]+?_|__[\s\S]+?__|~~[\s\S]+?~~))/g;
   const parts = text.split(regex);
   return parts.filter(Boolean).map(part => {
+    const linkMatch = part.match(/^\[(.*?)\]\((.*?)\)$/);
+    if (linkMatch) {
+      return { text: linkMatch[1], url: linkMatch[2], isLink: true };
+    }
     if (part.startsWith('***') && part.endsWith('***') && part.length >= 6) {
       return { text: part.slice(3, -3), bold: true, italic: true };
     }
@@ -260,9 +265,11 @@ function getFormattedLines(c, text, maxWidth, baseFontFamily, baseFontSize, isTi
         const style = {
           bold: token.bold || isTitleBold,
           italic: token.italic,
-          underline: token.underline,
+          underline: token.underline || token.isLink,
           strike: token.strike,
-          text: word
+          text: word,
+          url: token.url,
+          isLink: token.isLink
         };
         
         let fontStyle = "";
@@ -309,7 +316,10 @@ function drawFormattedLine(c, lineTokens, startX, y, fontSize, fontFamily, align
     c.font = `${fontStyle}${fontSize}px ${fontFamily}`;
 
     const trimmed = t.text.trim();
-    if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    const isRawUrl = trimmed.startsWith("http://") || trimmed.startsWith("https://");
+    const targetUrl = t.url || (isRawUrl ? trimmed : null);
+
+    if (t.isLink || isRawUrl) {
       c.fillStyle = "#6ea8fe";
     } else {
       c.fillStyle = defaultColor;
@@ -317,7 +327,17 @@ function drawFormattedLine(c, lineTokens, startX, y, fontSize, fontFamily, align
 
     c.fillText(t.text, x, y);
 
-    if (t.underline) {
+    if (targetUrl) {
+      clickHitRegions.push({
+        x: x,
+        y: y,
+        w: t.w,
+        h: fontSize + 4,
+        url: targetUrl
+      });
+    }
+
+    if (t.underline || t.isLink) {
       c.beginPath();
       c.moveTo(x, y + fontSize + 1);
       c.lineTo(x + t.w, y + fontSize + 1);
@@ -405,6 +425,7 @@ function drawBezierLink(ctx, p1, p2, isHighlighted = false, isSelected = false) 
 }
 
 function draw(){
+ clickHitRegions = [];
  const r=ws.getBoundingClientRect();ctx.clearRect(0,0,r.width,r.height);
  ctx.save();ctx.translate(state.camera.x,state.camera.y);ctx.scale(state.camera.scale,state.camera.scale);
  
@@ -572,6 +593,19 @@ canvas.addEventListener("dblclick",e=>{
 canvas.addEventListener("pointerdown",e=>{
  const n=nodeAt(e.clientX,e.clientY);canvas.setPointerCapture(e.pointerId);
  const isCtrl = e.ctrlKey || e.metaKey;
+
+ // 0. Clic sur un lien interactif
+ const wp = worldPoint(e.clientX, e.clientY);
+ for (const reg of clickHitRegions) {
+   if (wp.x >= reg.x && wp.x <= reg.x + reg.w && wp.y >= reg.y && wp.y <= reg.y + reg.h) {
+     let target = reg.url;
+     if (!target.startsWith("http://") && !target.startsWith("https://")) {
+       target = "https://" + target;
+     }
+     window.open(target, "_blank", "noopener,noreferrer");
+     return;
+   }
+ }
 
  // 1. Clic sur le bouton de suppression du lien
  if (state.selectedEdge && isOverDeleteEdgeBtn(state.selectedEdge, e.clientX, e.clientY)) {
