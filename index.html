@@ -759,62 +759,122 @@ $("#newBtn").onclick=()=>{if(state.nodes.length&&!confirm("Créer une nouvelle c
 $("#importBtn").onclick=()=>$("#fileJson").click();
 $("#fileJson").onchange=e=>{const f=e.target.files[0];if(!f)return;const rd=new FileReader();rd.onload=()=>{try{const d=JSON.parse(rd.result);if(!Array.isArray(d.nodes)||!Array.isArray(d.edges))throw 0;state.title=d.title||"Carte importée";state.nodes=d.nodes;state.edges=d.edges;state.camera=d.camera||{x:0,y:0,scale:1};state.selectedNodes=[];state.selectedEdge=null;saveLocal();requestDraw();toast("Carte importée")}catch{toast("JSON invalide")}};rd.readAsText(f);e.target.value=""};
 function download(name,data,type){const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([data],{type}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
-$("#exportJsonBtn").onclick=()=>{const data={format:"MindCanvas",version:1,title:state.title,nodes:state.nodes,edges:state.edges,camera:state.camera};download((state.title||"carte").replace(/[^\w-]+/g,"_")+".json",JSON.stringify(data,null,2),"application/json");toast("JSON téléchargé")};
-$("#pngBtn").onclick=()=>{
- if(!state.nodes.length){toast("Ajoutez au moins un nœud");return}
- const minX=Math.min(...state.nodes.map(n=>n.x-n.w/2))-60,maxX=Math.max(...state.nodes.map(n=>n.x+n.w/2))+60,minY=Math.min(...state.nodes.map(n=>n.y-n.h/2))-60,maxY=Math.max(...state.nodes.map(n=>n.y+n.h/2))+60;
- const scale=2,w=Math.ceil((maxX-minX)*scale),h=Math.ceil((maxY-minY)*scale),off=document.createElement("canvas");off.width=w;off.height=h;const c=off.getContext("2d");c.fillStyle="#0b1020";c.fillRect(0,0,w,h);c.save();c.scale(scale,scale);c.translate(-minX,-minY);
- 
- for(const e of state.edges){
-   const a=state.nodes.find(n=>n.id===e.a),b=state.nodes.find(n=>n.id===e.b);
-   if(!a||!b)continue;
-   const p1 = getIntersectionPoint(a, b.x, b.y);
-   const p2 = getIntersectionPoint(b, a.x, a.y);
-   drawBezierLink(c, p1, p2);
- }
+const DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/1544651651757908008/oopQrZHRvIJR-6U8xJREU-zkFReSwrEZeAfRyYDENlNqaJyiM19Gri13kDKDXoFjXY3w";
 
- for(const n of state.nodes){
-   const bannerHeight = n.image ? 120 : 0;
-   const x=n.x-n.w/2,y=n.y-n.h/2;
-   const titleFontSize = n.isTitle ? 19 : 15;
-   const noteFontSize = 12;
-   const fontFamily = "Inter,system-ui,sans-serif";
-   const tw = n.w - 28;
-   const alignMode = n.isTitle ? 'center' : 'left';
+function buildPngBlob(){
+  return new Promise((resolve,reject)=>{
+    if(!state.nodes.length){reject(new Error("Ajoutez au moins un nœud"));return}
+    const minX=Math.min(...state.nodes.map(n=>n.x-n.w/2))-60,maxX=Math.max(...state.nodes.map(n=>n.x+n.w/2))+60,minY=Math.min(...state.nodes.map(n=>n.y-n.h/2))-60,maxY=Math.max(...state.nodes.map(n=>n.y+n.h/2))+60;
+    const scale=2,w=Math.ceil((maxX-minX)*scale),h=Math.ceil((maxY-minY)*scale),off=document.createElement("canvas");off.width=w;off.height=h;const c=off.getContext("2d");c.fillStyle="#0b1020";c.fillRect(0,0,w,h);c.save();c.scale(scale,scale);c.translate(-minX,-minY);
 
-   roundedRect(c,x,y,n.w,n.h,16);c.fillStyle=n.isTitle ? "#1a2744" : "#141e34";c.fill();c.strokeStyle=n.isTitle ? "#6ea8fe" : "#2a3957";c.lineWidth=n.isTitle ? 2 : 1;c.stroke();
-   
-   if(n.image){
-     const img = getCachedImage(n.image);
-     if(img && img.complete) {
-       c.save();
-       roundedRect(c, x, y, n.w, bannerHeight, {tl: 16, tr: 16, bl: 0, br: 0});
-       c.clip();
-       drawCoverImage(c, img, x, y, n.w, bannerHeight);
-       c.restore();
-     }
-   }
-   
-   c.textBaseline="top";
-   let cy = y + bannerHeight + 14;
+    for(const e of state.edges){
+      const a=state.nodes.find(n=>n.id===e.a),b=state.nodes.find(n=>n.id===e.b);
+      if(!a||!b)continue;
+      const p1=getIntersectionPoint(a,b.x,b.y);
+      const p2=getIntersectionPoint(b,a.x,a.y);
+      drawBezierLink(c,p1,p2);
+    }
 
-   const titleLines = getFormattedLines(c, n.text || "Sans titre", tw, fontFamily, titleFontSize, true);
-   titleLines.forEach(lineTokens => {
-     drawFormattedLine(c, lineTokens, x + 14, cy, titleFontSize, fontFamily, alignMode, tw, '#f2f6ff');
-     cy += titleFontSize + 6;
-   });
+    for(const n of state.nodes){
+      const bannerHeight=n.image?120:0;
+      const x=n.x-n.w/2,y=n.y-n.h/2;
+      const titleFontSize=n.isTitle?19:15;
+      const noteFontSize=12;
+      const fontFamily="Inter,system-ui,sans-serif";
+      const tw=n.w-28;
+      const alignMode=n.isTitle?"center":"left";
 
-   if(n.note){
-     cy += 4;
-     const noteLines = getFormattedLines(c, n.note, tw, fontFamily, noteFontSize, false);
-     noteLines.forEach(lineTokens => {
-       drawFormattedLine(c, lineTokens, x + 14, cy, noteFontSize, fontFamily, alignMode, tw, '#91a0bf');
-       cy += noteFontSize + 5;
-     });
-   }
- }
- c.restore();off.toBlob(b=>{const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download=(state.title||"carte").replace(/[^\w-]+/g,"_")+".png";a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)},"image/png");toast("PNG généré")
+      roundedRect(c,x,y,n.w,n.h,16);c.fillStyle=n.isTitle?"#1a2744":"#141e34";c.fill();c.strokeStyle=n.isTitle?"#6ea8fe":"#2a3957";c.lineWidth=n.isTitle?2:1;c.stroke();
+
+      if(n.image){
+        const img=getCachedImage(n.image);
+        if(img&&img.complete){
+          c.save();
+          roundedRect(c,x,y,n.w,bannerHeight,{tl:16,tr:16,bl:0,br:0});
+          c.clip();
+          drawCoverImage(c,img,x,y,n.w,bannerHeight);
+          c.restore();
+        }
+      }
+
+      c.textBaseline="top";
+      let cy=y+bannerHeight+14;
+      const titleLines=getFormattedLines(c,n.text||"Sans titre",tw,fontFamily,titleFontSize,true);
+      titleLines.forEach(lineTokens=>{
+        drawFormattedLine(c,lineTokens,x+14,cy,titleFontSize,fontFamily,alignMode,tw,"#f2f6ff");
+        cy+=titleFontSize+6;
+      });
+
+      if(n.note){
+        cy+=4;
+        const noteLines=getFormattedLines(c,n.note,tw,fontFamily,noteFontSize,false);
+        noteLines.forEach(lineTokens=>{
+          drawFormattedLine(c,lineTokens,x+14,cy,noteFontSize,fontFamily,alignMode,tw,"#91a0bf");
+          cy+=noteFontSize+5;
+        });
+      }
+    }
+
+    c.restore();
+    off.toBlob(blob=>{
+      if(blob) resolve(blob);
+      else reject(new Error("Impossible de générer le PNG"));
+    },"image/png");
+  });
+}
+
+async function exportToDiscord(){
+  const data={format:"MindCanvas",version:1,title:state.title,nodes:state.nodes,edges:state.edges,camera:state.camera};
+  const baseName=(state.title||"carte").replace(/[^\w-]+/g,"_")||"carte";
+  const jsonBlob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
+  const pngBlob=await buildPngBlob();
+
+  const form=new FormData();
+  form.append("content",`Export MindCanvas — ${state.title||"Carte sans titre"}`);
+  form.append("files[0]",jsonBlob,`${baseName}.json`);
+  form.append("files[1]",pngBlob,`${baseName}.png`);
+
+  const response=await fetch(DISCORD_WEBHOOK_URL,{method:"POST",body:form});
+  if(!response.ok){
+    const details=await response.text().catch(()=>"");
+    throw new Error(`Discord ${response.status}${details?` — ${details}`:""}`);
+  }
+
+  toast("JSON + PNG envoyés sur Discord");
+}
+
+$("#exportJsonBtn").onclick=async()=>{
+  try{
+    const btn=$("#exportJsonBtn");
+    btn.disabled=true;
+    btn.textContent="Envoi…";
+    await exportToDiscord();
+  }catch(error){
+    console.error(error);
+    toast("Échec de l'envoi Discord");
+  }finally{
+    const btn=$("#exportJsonBtn");
+    btn.disabled=false;
+    btn.textContent="Exporter JSON";
+  }
 };
+
+$("#pngBtn").onclick=async()=>{
+  try{
+    if(!state.nodes.length){toast("Ajoutez au moins un nœud");return}
+    const blob=await buildPngBlob();
+    const baseName=(state.title||"carte").replace(/[^\w-]+/g,"_")||"carte";
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(blob);
+    a.download=baseName+".png";
+    a.click();
+    setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+    toast("PNG généré");
+  }catch(error){
+    console.error(error);
+    toast("Impossible de générer le PNG");
+  }
+}
 
 loadLocal();resize();if(!state.nodes.length){const r=ws.getBoundingClientRect();addNode((r.width/2-state.camera.x)/state.camera.scale,(r.height/2-state.camera.y)/state.camera.scale,null,"Mon idée");fit()}else requestDraw();
 })();
